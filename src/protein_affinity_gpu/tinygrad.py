@@ -7,13 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-
-try:
-    from tinygrad import Tensor
-except Exception as exc:  # pragma: no cover - optional dependency
-    raise ImportError(
-        "The tinygrad backend requires the optional 'tinygrad' dependency."
-    ) from exc
+from tinygrad import Device, Tensor
 
 from .contacts import analyze_contacts_tinygrad, calculate_residue_contacts_tinygrad
 from .logging_utils import get_logger, log_duration
@@ -66,12 +60,7 @@ def _device_name() -> str:
     override = os.environ.get("TINYGRAD_DEVICE")
     if override:
         return override.upper()
-    try:
-        from tinygrad import Device
-
-        return str(Device.DEFAULT).upper()
-    except Exception:  # pragma: no cover - defensive
-        return "CPU"
+    return str(Device.DEFAULT).upper()
 
 
 def estimate_optimal_block_size(n_atoms: int) -> int:

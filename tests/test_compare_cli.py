@@ -59,11 +59,14 @@ def test_run_comparison_writes_summary_and_rows(monkeypatch, tmp_path: Path):
     def jax_predictor(struct_path, **kwargs):
         return DummyResult(Path(struct_path).stem, offset=0.5)
 
+    def tinygrad_predictor(struct_path, **kwargs):
+        return DummyResult(Path(struct_path).stem, offset=0.2)
+
     monkeypatch.setattr(compare_cli, "predict_binding_affinity", cpu_predictor)
     monkeypatch.setattr(compare_cli, "_load_jax_predictor", lambda: jax_predictor)
+    monkeypatch.setattr(compare_cli, "_load_tinygrad_predictor", lambda: tinygrad_predictor)
     monkeypatch.setattr(compare_cli, "get_jax_backend_name", lambda: "gpu")
-    monkeypatch.setattr(compare_cli, "tinygrad_available", lambda: False)
-    monkeypatch.setattr(compare_cli, "get_tinygrad_backend_name", lambda: "unavailable")
+    monkeypatch.setattr(compare_cli, "get_tinygrad_backend_name", lambda: "metal")
 
     rows_path, summary_path, summary = compare_cli.run_comparison(
         manifest_path=manifest,

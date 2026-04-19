@@ -22,7 +22,7 @@ for candidate in (ROOT, SRC):
         sys.path.insert(0, str(candidate))
 
 try:
-    from benchmarks.benchmark import cuda_available, tinygrad_available  # noqa: E402
+    from benchmarks.benchmark import cuda_available  # noqa: E402
     from protein_affinity_gpu.cli.predict import (  # noqa: E402
         _load_jax_predictor,
         _load_tinygrad_predictor,
@@ -34,7 +34,7 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import-time guidance
     raise SystemExit(
         f"Missing Python dependency '{exc.name}'. "
         "Use the repo virtualenv or install dependencies with "
-        "\".venv/bin/python -m pip install -e '.[compare]'\"."
+        "\".venv/bin/python -m pip install -e .\"."
     ) from exc
 
 LOGGER = logging.getLogger(__name__)
@@ -91,10 +91,8 @@ def get_jax_backend_name() -> str:
 
 
 def get_tinygrad_backend_name() -> str:
-    try:
-        from tinygrad import Device
-    except Exception:
-        return "unavailable"
+    from tinygrad import Device
+
     return str(Device.DEFAULT).lower()
 
 
@@ -576,12 +574,8 @@ def run_comparison(
     if require_gpu and not cuda_available():
         raise RuntimeError("No GPU-backed JAX device detected. Re-run without --require-gpu to allow fallback.")
 
-    try:
-        jax_predictor = _load_jax_predictor()
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError("JAX comparison requires the optional 'jax' and 'jaxlib' dependencies.") from exc
-
-    tinygrad_predictor = _load_tinygrad_predictor() if tinygrad_available() else None
+    jax_predictor = _load_jax_predictor()
+    tinygrad_predictor = _load_tinygrad_predictor()
 
     rows = []
     failures = []
@@ -608,19 +602,16 @@ def run_comparison(
             acc_threshold=acc_threshold,
             sphere_points=sphere_points,
         )
-        if tinygrad_predictor is not None:
-            tinygrad_payload = _run_backend(
-                predictor=tinygrad_predictor,
-                structure_path=structure_path,
-                repeats=repeats,
-                selection=selection,
-                temperature=temperature,
-                distance_cutoff=distance_cutoff,
-                acc_threshold=acc_threshold,
-                sphere_points=sphere_points,
-            )
-        else:
-            tinygrad_payload = {"status": "skipped", "error": "tinygrad not installed"}
+        tinygrad_payload = _run_backend(
+            predictor=tinygrad_predictor,
+            structure_path=structure_path,
+            repeats=repeats,
+            selection=selection,
+            temperature=temperature,
+            distance_cutoff=distance_cutoff,
+            acc_threshold=acc_threshold,
+            sphere_points=sphere_points,
+        )
 
         row = dict(manifest_row)
         row.update(

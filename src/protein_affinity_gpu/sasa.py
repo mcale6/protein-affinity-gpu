@@ -3,15 +3,9 @@ import math
 import jax.numpy as jnp
 import numpy as np
 from jax import jit
-
-try:  # tinygrad is an optional backend
-    from tinygrad import Tensor as _TGTensor
-    from tinygrad import TinyJit as _TGTinyJit
-    from tinygrad import dtypes as _tg_dtypes
-except Exception:  # pragma: no cover - exercised without tinygrad installed
-    _TGTensor = None
-    _TGTinyJit = None
-    _tg_dtypes = None
+from tinygrad import Tensor as _TGTensor
+from tinygrad import TinyJit as _TGTinyJit
+from tinygrad import dtypes as _tg_dtypes
 
 
 def generate_sphere_points(n: int) -> jnp.ndarray:
@@ -143,8 +137,6 @@ def calculate_sasa_batch(
 
 def generate_sphere_points_tinygrad(n: int):
     """Golden-spiral sphere points as a tinygrad Tensor."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
     if n <= 0:
         return _TGTensor.zeros((0, 3))
     if n == 1:
@@ -189,11 +181,7 @@ def _calculate_sasa_tinygrad_impl(
     return (areas * (n_accessible / sphere_points.shape[0])).realize()
 
 
-if _TGTinyJit is not None:
-    calculate_sasa_tinygrad = _TGTinyJit(_calculate_sasa_tinygrad_impl)
-else:
-    def calculate_sasa_tinygrad(*args, **kwargs):
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
+calculate_sasa_tinygrad = _TGTinyJit(_calculate_sasa_tinygrad_impl)
 
 
 def calculate_sasa_batch_tinygrad(
@@ -209,9 +197,6 @@ def calculate_sasa_batch_tinygrad(
     Uses the dot-product formulation ``|a-b|² = |a|² + |b|² - 2⟨a,b⟩`` to
     avoid materializing the ``[block, M, N, 3]`` pairwise-diff tensor.
     """
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
-
     masked_coords = (coords * mask[:, None]).realize()
     masked_radii = (vdw_radii * mask).realize()
     radii_with_probe = ((masked_radii + probe_radius) * mask).realize()

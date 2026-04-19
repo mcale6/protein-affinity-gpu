@@ -51,14 +51,6 @@ def cuda_available() -> bool:
     return "gpu" in platforms or "cuda" in platforms
 
 
-def tinygrad_available() -> bool:
-    try:
-        import tinygrad  # noqa: F401
-    except Exception:
-        return False
-    return True
-
-
 def _benchmark_single(predictor, structure_path: Path, repeats: int, **kwargs):
     timings = []
     last_result = None
@@ -114,16 +106,6 @@ def run_benchmark(
                     continue
                 predictor = _load_jax_predictor()
             elif target == "tinygrad":
-                if not tinygrad_available():
-                    benchmark_report["results"].append(
-                        {
-                            "structure_id": structure_path.stem,
-                            "target": target,
-                            "status": "skipped",
-                            "reason": "tinygrad backend not available.",
-                        }
-                    )
-                    continue
                 predictor = _load_tinygrad_predictor()
             else:
                 predictor = predict_binding_affinity

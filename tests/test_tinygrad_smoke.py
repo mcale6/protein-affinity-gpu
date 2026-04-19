@@ -1,14 +1,8 @@
 import math
 from pathlib import Path
 
-import pytest
-
 
 def test_tinygrad_prediction_finite_and_close_to_cpu():
-    pytest.importorskip("tinygrad")
-    pytest.importorskip("prodigy_prot")
-    pytest.importorskip("freesasa")
-
     from protein_affinity_gpu import predict_binding_affinity, predict_binding_affinity_tinygrad
 
     fixture = Path("benchmarks/fixtures/1A2K.pdb")

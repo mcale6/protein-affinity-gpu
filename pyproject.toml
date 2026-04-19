@@ -11,16 +11,18 @@ authors = [{ name = "mcale6" }]
 dependencies = [
     "biopython",
     "prodigy-prot",
-    "numpy>=1.23,<3.0"
+    "freesasa",
+    "numpy>=1.23,<3.0",
+    "jax",
+    "jaxlib",
+    "tinygrad",
+    "matplotlib",
+    "pandas",
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
 
 [project.optional-dependencies]
-compare = ["freesasa", "jax", "jaxlib", "tinygrad", "matplotlib"]
-jax = ["jax", "jaxlib"]
-tinygrad = ["tinygrad"]
-bench = ["matplotlib", "pandas"]
 dev = ["build", "pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]

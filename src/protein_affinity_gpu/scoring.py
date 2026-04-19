@@ -1,9 +1,5 @@
 import jax.numpy as jnp
-
-try:  # tinygrad is an optional backend
-    from tinygrad import Tensor as _TGTensor
-except Exception:  # pragma: no cover - exercised without tinygrad installed
-    _TGTensor = None
+from tinygrad import Tensor as _TGTensor
 
 
 NIS_CONSTANTS = {
@@ -77,8 +73,6 @@ def dg_to_kd(dg: jnp.ndarray, temperature: float = 25.0) -> jnp.ndarray:
 
 def get_atom_radii_tinygrad(sequence_one_hot, residue_radii_matrix):
     """Project residue one-hot probabilities into per-atom van der Waals radii."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
     return (sequence_one_hot @ residue_radii_matrix).reshape(-1)
 
 
@@ -89,8 +83,6 @@ def calculate_relative_sasa_tinygrad(
     atoms_per_residue: int,
 ):
     """Residue-level relative SASA = per-residue sum / reference total (tinygrad)."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
     residue_sasa = complex_sasa.reshape(-1, atoms_per_residue).sum(axis=1)
     reference_sasa = sequence_probabilities @ relative_sasa_array
     return residue_sasa / (reference_sasa + 1e-8)
@@ -103,8 +95,6 @@ def calculate_nis_percentages_tinygrad(
     threshold: float = 0.05,
 ):
     """Percentage of the non-interacting surface per residue character (tinygrad)."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
     residue_classes = sequence_probabilities @ character_matrix
     mask = (sasa_values >= threshold).float()
     counts = (residue_classes * mask[:, None]).sum(axis=0)
@@ -123,8 +113,6 @@ def score_ic_nis_tinygrad(
     intercept,
 ):
     """Compute ΔG via the PRODIGY IC-NIS linear model (tinygrad)."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
     p_nis_a = p_nis_a.clip(0.0, 100.0)
     p_nis_c = p_nis_c.clip(0.0, 100.0)
     inputs = _TGTensor.stack(ic_cc, ic_ca, ic_pp, ic_pa, p_nis_a, p_nis_c)
@@ -133,8 +121,6 @@ def score_ic_nis_tinygrad(
 
 def dg_to_kd_tinygrad(dg, temperature: float = 25.0):
     """Convert free energy (kcal/mol) to dissociation constant (M) on tinygrad."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
     gas_constant = 0.0019858775
     temperature_kelvin = temperature + 273.15
     return dg.clip(-100.0, 100.0).div(gas_constant * temperature_kelvin).exp()
@@ -142,8 +128,6 @@ def dg_to_kd_tinygrad(dg, temperature: float = 25.0):
 
 def coefficient_tensors_tinygrad():
     """Return the PRODIGY IC-NIS coefficient vector and intercept as tinygrad tensors."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
     coeffs = _TGTensor(
         [
             NIS_CONSTANTS["ic_cc"],

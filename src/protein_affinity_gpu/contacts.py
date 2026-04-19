@@ -1,9 +1,5 @@
 import jax.numpy as jnp
-
-try:  # tinygrad is an optional backend
-    from tinygrad import Tensor as _TGTensor
-except Exception:  # pragma: no cover - exercised without tinygrad installed
-    _TGTensor = None
+from tinygrad import Tensor as _TGTensor
 
 
 def calculate_residue_contacts(
@@ -63,9 +59,6 @@ def calculate_residue_contacts_tinygrad(
     distance_cutoff: float = 5.5,
 ):
     """Residue-level boolean contact matrix from atom coordinates (tinygrad)."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
-
     target_mask = target_mask.reshape(target_pos.shape[0], -1)
     binder_mask = binder_mask.reshape(binder_pos.shape[0], -1)
 
@@ -89,9 +82,6 @@ def analyze_contacts_tinygrad(
     class_matrix,
 ):
     """Aggregate residue contacts into the 6-tuple [AA, CC, PP, AC, AP, CP] (tinygrad)."""
-    if _TGTensor is None:
-        raise ImportError("The tinygrad backend requires the optional 'tinygrad' dependency.")
-
     target_classes = target_sequence @ class_matrix
     binder_classes = binder_sequence @ class_matrix
     # Replaces jnp.einsum("ti,bj->tbij", ...) — outer product via broadcasts.

@@ -97,8 +97,7 @@ from protein_affinity_gpu import (
 )
 ```
 
-The `*_tinygrad` entry point is lazy-loaded and only requires the optional
-`tinygrad` package when actually called.
+The `*_tinygrad` entry point is lazy-loaded at first call.
 
 ### 3.1 Structure I/O — `structure.py`
 
@@ -156,8 +155,7 @@ predict_binding_affinity_tinygrad(
 ) -> ProdigyResults
 ```
 
-- Requires the optional `[tinygrad]` extra; import is guarded so a missing
-  `tinygrad` package leaves the CPU and JAX paths unaffected.
+- Imports `tinygrad` unconditionally — it's a core dependency of the package.
 - Device selection: `Device.DEFAULT`, with `TINYGRAD_DEVICE=CPU|METAL|CUDA`
   environment override. `METAL` / `CUDA` / `GPU` devices route through
   `calculate_sasa_batch_tinygrad`; any other device (including `CPU` /
@@ -271,9 +269,7 @@ protein-affinity-benchmark <input_path> \
 
 - Runs `repeats` iterations per target per structure, reporting a cold run and
   the mean of the warm runs.
-- `cuda` is auto-skipped if JAX is unavailable or no GPU/CUDA device is found;
-  `tinygrad` is auto-skipped if the optional `tinygrad` package is not
-  installed.
+- `cuda` is auto-skipped if no GPU/CUDA device is found.
 - Writes `<output-dir>/benchmark_results.json` and echoes the report to stdout.
 - `benchmarks/run.py` is a shim so the harness runs from a source checkout
   without installing the package.
@@ -326,7 +322,7 @@ Located under [`tests/`](../tests). Common fixture: `benchmarks/fixtures/1A2K.pd
 | `test_imports.py` | Top-level re-exports and CLI modules import. |
 | `test_structure.py` | `load_complex` sanitizes H, water, and non-selected chains. |
 | `test_regression.py` | CPU vs JAX prediction stay within `|ΔΔG| < 0.75` and `|ΔIC| < 10`. Skips if JAX / prodigy-prot / freesasa are missing. |
-| `test_tinygrad_smoke.py` | Tinygrad prediction returns finite ΔG, within `|ΔΔG| < 0.75` and `|ΔIC| < 10` of the CPU reference. Skips if `tinygrad` is not installed. |
+| `test_tinygrad_smoke.py` | Tinygrad prediction returns finite ΔG, within `|ΔΔG| < 0.75` and `|ΔIC| < 10` of the CPU reference. |
 | `test_benchmark_smoke.py` | Benchmark harness runs with mocked predictor; CUDA is reported as skipped when unavailable. |
 | `test_resources.py` | Packaged `vdw.radii` is accessible via `read_text_resource`. |
 | `test_residue_library.py` | `ResidueLibrary.radii_matrix` has the expected shape. |
@@ -348,13 +344,11 @@ push and pull request.
 
 ### 7.1 Dependencies (`pyproject.toml`)
 
-- Core: `biopython`, `prodigy-prot`, `numpy>=1.23,<3.0`.
-- `[jax]` extra: `jax`, `jaxlib`.
-- `[tinygrad]` extra: `tinygrad`.
-- `[bench]` extra: `matplotlib`, `pandas`.
+- Core: `biopython`, `prodigy-prot`, `freesasa`, `numpy>=1.23,<3.0`, `jax`,
+  `jaxlib`, `tinygrad`, `matplotlib`, `pandas`. A single
+  `pip install protein-affinity-gpu` brings in every backend and the
+  benchmarking plot stack.
 - `[dev]` extra: `build`, `pytest>=8.0`, `ruff>=0.6`.
-- `freesasa` is imported lazily inside `cpu.execute_freesasa`; install it
-  explicitly for CPU predictions.
 
 Build system: **Hatchling**, with the version read dynamically from
 `src/protein_affinity_gpu/version.py`.
