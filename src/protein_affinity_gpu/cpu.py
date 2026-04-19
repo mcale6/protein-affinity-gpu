@@ -1,4 +1,5 @@
 import logging
+from copy import deepcopy
 from pathlib import Path
 from typing import Optional
 
@@ -65,6 +66,39 @@ def execute_freesasa(structure, sphere_points: int | None = None):
     return atom_sasa, residue_sasa, absolute_difference
 
 
+def _prune_model_chains(model, selected_chains: list[str]):
+    current_chains = {chain.id for chain in model}
+    missing = sorted(set(selected_chains) - current_chains)
+    if missing:
+        raise ValueError(f"Selected chain(s) not present in structure: {', '.join(missing)}")
+
+    for chain in list(model):
+        if chain.id not in selected_chains:
+            model.detach_child(chain.id)
+
+
+def _select_structure_chains(structure, selected_chains: list[str]):
+    """Return a detached copy of a model containing only the requested chains."""
+    selected_structure = deepcopy(structure)
+    _prune_model_chains(selected_structure, selected_chains)
+    return selected_structure
+
+
+def _select_freesasa_structure(structure, selected_chains: list[str]):
+    """Return a Structure wrapper with one selected model for freesasa."""
+    parent = structure.get_parent() if getattr(structure, "get_parent", None) else None
+    if parent is None:
+        return _select_structure_chains(structure, selected_chains)
+
+    selected_parent = deepcopy(parent)
+    for model in list(selected_parent):
+        if model.id != structure.id:
+            selected_parent.detach_child(model.id)
+            continue
+        _prune_model_chains(model, selected_chains)
+    return selected_parent
+
+
 def _run_prodigy_prediction(
     structure,
     selection: str,
@@ -75,20 +109,26 @@ def _run_prodigy_prediction(
 ):
     Prodigy, analyse_contacts, analyse_nis, calculate_ic, IC_NIS, _ = _load_prodigy_modules()
     selection_groups = [chain.strip() for chain in selection.split(",") if chain.strip()]
-    predictor = Prodigy(structure, name=getattr(structure, "id", ""), selection=selection_groups, temp=temperature)
-    freesasa_structure = structure.get_parent() if getattr(structure, "get_parent", None) else structure
 
     chains = selection_groups
     if len(chains) != 2:
         raise ValueError("Selection must contain exactly two chains.")
 
+    selected_structure = _select_structure_chains(structure, chains)
+    predictor = Prodigy(
+        selected_structure,
+        name=getattr(selected_structure, "id", ""),
+        selection=selection_groups,
+        temp=temperature,
+    )
     selection_dict = {chain: idx for idx, chain in enumerate(chains)}
     predictor.temperature = temperature
     predictor.distance_cutoff = distance_cutoff
     predictor.acc_threshold = acc_threshold
     predictor.sphere_points = sphere_points
-    predictor.ic_network = calculate_ic(structure, d_cutoff=distance_cutoff, selection=selection_dict)
+    predictor.ic_network = calculate_ic(selected_structure, d_cutoff=distance_cutoff, selection=selection_dict)
     predictor.bins = analyse_contacts(predictor.ic_network)
+    freesasa_structure = _select_freesasa_structure(structure, chains)
     predictor.asa_data, predictor.rsa_data, predictor.abs_diff_data = execute_freesasa(
         freesasa_structure,
         sphere_points=sphere_points,

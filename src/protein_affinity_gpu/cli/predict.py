@@ -17,6 +17,20 @@ def _load_jax_predictor():
     return predict_binding_affinity_jax
 
 
+def _load_tinygrad_predictor():
+    from ..tinygrad import predict_binding_affinity_tinygrad
+
+    return predict_binding_affinity_tinygrad
+
+
+def _resolve_predictor(backend: str):
+    if backend == "jax":
+        return _load_jax_predictor()
+    if backend == "tinygrad":
+        return _load_tinygrad_predictor()
+    return predict_binding_affinity
+
+
 def run_predictions(
     input_path: Path,
     backend: str,
@@ -29,7 +43,7 @@ def run_predictions(
     output_dir: Path | None = None,
     verbose: bool = False,
 ):
-    predictor = _load_jax_predictor() if backend == "jax" else predict_binding_affinity
+    predictor = _resolve_predictor(backend)
     results = {}
     for structure_path in collect_structure_files(input_path):
         prediction = predictor(
@@ -50,7 +64,12 @@ def run_predictions(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Predict protein binding affinity for one or more structures.")
     parser.add_argument("input_path", type=Path, help="Path to a structure file or directory.")
-    parser.add_argument("--backend", choices=("cpu", "jax"), default="cpu", help="Prediction backend.")
+    parser.add_argument(
+        "--backend",
+        choices=("cpu", "jax", "tinygrad"),
+        default="cpu",
+        help="Prediction backend.",
+    )
     parser.add_argument("--selection", default="A,B", help="Two-chain selection, for example 'A,B'.")
     parser.add_argument("--temperature", type=float, default=25.0, help="Temperature in Celsius.")
     parser.add_argument("--distance-cutoff", type=float, default=5.5, help="Interface distance cutoff in angstrom.")

@@ -13,6 +13,7 @@ __all__ = [
     "load_structure",
     "predict_binding_affinity",
     "predict_binding_affinity_jax",
+    "predict_binding_affinity_tinygrad",
 ]
 
 
@@ -26,5 +27,12 @@ def predict_binding_affinity(*args, **kwargs):
 def predict_binding_affinity_jax(*args, **kwargs):
     """Run the JAX affinity predictor."""
     from .jax import predict_binding_affinity_jax as impl
+
+    return impl(*args, **kwargs)
+
+
+def predict_binding_affinity_tinygrad(*args, **kwargs):
+    """Run the tinygrad affinity predictor."""
+    from .tinygrad import predict_binding_affinity_tinygrad as impl
 
     return impl(*args, **kwargs)

@@ -1,0 +1,17 @@
+pdb_id	chain1	chain2	difficulty	n_virtual_xl	best_lrmsd_no_xl	best_lrmsd_7xl_10best	best_lrmsd_7xl	ref_table
+1MQ8	A	B	M	23	55.1	4.3	4.3	Kahraman-2013-T3
+1JK9	A	B	D	31	40.3	6.8	7.2	Kahraman-2013-T3
+2CFH	A	C	M	16	38.2	7.1	7.6	Kahraman-2013-T3
+2NZ8	A	B	M	35	24.1	7.9	7.9	Kahraman-2013-T3
+1ATN	A	D	D	9	44.7	8.0	8.0	Kahraman-2013-T3
+1FQ1	A	B	D	28	31.5	8.0	8.0	Kahraman-2013-T3
+1I2M	A	B	M	25	30.9	8.4	8.4	Kahraman-2013-T3
+2Z0E	A	B	M	12	25.0	7.5	8.5	Kahraman-2013-T3
+1F6M	A	C	D	20	52.1	6.0	8.6	Kahraman-2013-T3
+1BKD	R	S	D	43	34.5	9.0	9.0	Kahraman-2013-T3
+2J7P	A	D	M	31	39.8	9.8	9.8	Kahraman-2013-T3
+1HE8	B	A	M	38	90.8	10.7	10.7	Kahraman-2013-T3
+1IBR	A	B	D	49	47.3	13.0	13.0	Kahraman-2013-T3
+1Y64	A	B	D	65	55.8	19.7	24.9	Kahraman-2013-T3
+1IRA	Y	X	D	26	35.7	34.4	34.4	Kahraman-2013-T3
+1H1V	A	G	D	20	83.0	42.4	42.4	Kahraman-2013-T3

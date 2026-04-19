@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "protein-affinity-gpu"
 dynamic = ["version"]
-description = "Protein binding affinity prediction with CPU and JAX-backed workflows"
+description = "Protein binding affinity prediction with CPU, JAX, and tinygrad backends"
 requires-python = ">=3.10"
 authors = [{ name = "mcale6" }]
 dependencies = [
@@ -17,13 +17,14 @@ readme = "README.md"
 license = { file = "LICENSE" }
 
 [project.optional-dependencies]
+compare = ["freesasa", "jax", "jaxlib", "tinygrad", "matplotlib"]
 jax = ["jax", "jaxlib"]
+tinygrad = ["tinygrad"]
 bench = ["matplotlib", "pandas"]
 dev = ["build", "pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
 protein-affinity-predict = "protein_affinity_gpu.cli.predict:main"
-protein-affinity-benchmark = "protein_affinity_gpu.cli.benchmark:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/protein_affinity_gpu"]

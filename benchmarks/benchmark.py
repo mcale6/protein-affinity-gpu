@@ -1,21 +1,44 @@
+#!/usr/bin/env python3
+
 import argparse
 import json
 import logging
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ..cpu import predict_binding_affinity
-from ..resources import collect_structure_files, format_duration
-from ..results import NumpyEncoder
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+
+for candidate in (ROOT, SRC):
+    if str(candidate) not in sys.path:
+        sys.path.insert(0, str(candidate))
+
+try:
+    from protein_affinity_gpu.cpu import predict_binding_affinity  # noqa: E402
+    from protein_affinity_gpu.resources import collect_structure_files, format_duration  # noqa: E402
+    from protein_affinity_gpu.results import NumpyEncoder  # noqa: E402
+except ModuleNotFoundError as exc:  # pragma: no cover - import-time guidance
+    raise SystemExit(
+        f"Missing Python dependency '{exc.name}'. "
+        "Use the repo virtualenv or install dependencies with "
+        "\".venv/bin/python -m pip install -e '.[compare]'\"."
+    ) from exc
 
 LOGGER = logging.getLogger(__name__)
 
 
 def _load_jax_predictor():
-    from ..jax import predict_binding_affinity_jax
+    from protein_affinity_gpu.jax import predict_binding_affinity_jax
 
     return predict_binding_affinity_jax
+
+
+def _load_tinygrad_predictor():
+    from protein_affinity_gpu.tinygrad import predict_binding_affinity_tinygrad
+
+    return predict_binding_affinity_tinygrad
 
 
 def cuda_available() -> bool:
@@ -26,6 +49,14 @@ def cuda_available() -> bool:
 
     platforms = {device.platform.lower() for device in jax.devices()}
     return "gpu" in platforms or "cuda" in platforms
+
+
+def tinygrad_available() -> bool:
+    try:
+        import tinygrad  # noqa: F401
+    except Exception:
+        return False
+    return True
 
 
 def _benchmark_single(predictor, structure_path: Path, repeats: int, **kwargs):
@@ -52,7 +83,7 @@ def run_benchmark(
     input_path: Path,
     output_dir: Path,
     repeats: int = 3,
-    targets: tuple[str, ...] = ("cpu", "cuda"),
+    targets: tuple[str, ...] = ("cpu", "cuda", "tinygrad"),
     selection: str = "A,B",
     temperature: float = 25.0,
     distance_cutoff: float = 5.5,
@@ -82,6 +113,18 @@ def run_benchmark(
                     )
                     continue
                 predictor = _load_jax_predictor()
+            elif target == "tinygrad":
+                if not tinygrad_available():
+                    benchmark_report["results"].append(
+                        {
+                            "structure_id": structure_path.stem,
+                            "target": target,
+                            "status": "skipped",
+                            "reason": "tinygrad backend not available.",
+                        }
+                    )
+                    continue
+                predictor = _load_tinygrad_predictor()
             else:
                 predictor = predict_binding_affinity
 
@@ -107,7 +150,7 @@ def run_benchmark(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Benchmark CPU and CUDA prediction targets.")
+    parser = argparse.ArgumentParser(description="Benchmark CPU, CUDA (JAX), and tinygrad prediction targets.")
     parser.add_argument("input_path", type=Path, help="Path to a structure file or directory.")
     parser.add_argument("--output-dir", type=Path, default=Path("benchmarks/output"), help="Benchmark artifact directory.")
     parser.add_argument("--repeats", type=int, default=3, help="Number of runs per target.")
@@ -119,8 +162,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--targets",
         nargs="+",
-        choices=("cpu", "cuda"),
-        default=("cpu", "cuda"),
+        choices=("cpu", "cuda", "tinygrad"),
+        default=("cpu", "cuda", "tinygrad"),
         help="Benchmark targets to run.",
     )
     parser.add_argument("--verbose", action="store_true", help="Enable informational logging.")

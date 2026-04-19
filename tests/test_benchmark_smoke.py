@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from protein_affinity_gpu.cli import benchmark as benchmark_cli
+from benchmarks import benchmark as benchmark_cli
 
 
 class DummyResult:

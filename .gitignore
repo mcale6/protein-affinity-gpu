@@ -26,6 +26,7 @@ htmlcov/
 
 # Local outputs
 results/
+benchmarks/downloads/
 benchmarks/output/
 
 # Editors and OS files
