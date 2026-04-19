@@ -41,10 +41,13 @@ Run the benchmark harness:
 | `--sphere-points` | `100` | Shrake–Rupley sphere resolution. |
 | `--output-json` | off | Also write `<stem>_results.json` per structure. |
 | `--output-dir` | `results/` | Destination when `--output-json` is set. |
-| `--verbose` | off | `INFO`-level logging. |
+| `--verbose` | off | `DEBUG`-level logging with per-phase timings (stderr, colored on TTY). |
 
-Predictions for every input are printed to stdout as a single JSON document
-keyed by structure stem.
+The CLI prints a concise summary per structure to stdout (ΔG, Kd, contact
+analysis, NIS breakdown — the same block you get from `str(result)`).
+`--verbose` additionally streams colored phase timings to stderr, useful
+for profiling the tinygrad / JAX pipelines. Use `--output-json` to persist
+the full per-atom JSON to disk.
 
 ### `protein-affinity-benchmark` flags
 

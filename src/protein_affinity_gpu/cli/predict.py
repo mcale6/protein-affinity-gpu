@@ -1,14 +1,16 @@
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
 
 from ..cpu import predict_binding_affinity
+from ..logging_utils import setup_logging, supports_color
 from ..resources import collect_structure_files
-from ..results import NumpyEncoder
 
 LOGGER = logging.getLogger(__name__)
+
+_ANSI_RESET = "\x1b[0m"
+_HEADER_STYLE = "\x1b[1;36m"   # bold cyan
 
 
 def _load_jax_predictor():
@@ -77,14 +79,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sphere-points", type=int, default=100, help="Number of sphere points for SASA.")
     parser.add_argument("--output-json", action="store_true", help="Write JSON results for each structure.")
     parser.add_argument("--output-dir", type=Path, default=Path("results"), help="Directory for JSON outputs.")
-    parser.add_argument("--verbose", action="store_true", help="Enable informational logging.")
+    parser.add_argument("--verbose", action="store_true", help="Enable per-phase DEBUG timings.")
     return parser
+
+
+def _summary_text(structure_id: str, backend: str, result, *, use_color: bool) -> str:
+    header = f"=== {structure_id} [{backend}] ==="
+    if use_color:
+        header = f"{_HEADER_STYLE}{header}{_ANSI_RESET}"
+    return header + "\n" + str(result)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
+    setup_logging("DEBUG" if args.verbose else "WARNING")
 
     if not args.input_path.exists():
         parser.error(f"Input path not found: {args.input_path}")
@@ -106,9 +115,9 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error(str(exc))
         return 1
 
-    payload = {name: result.to_dict() for name, result in results.items()}
-    json.dump(payload, sys.stdout, indent=2, cls=NumpyEncoder)
-    sys.stdout.write("\n")
+    use_color = supports_color(sys.stdout)
+    for name, result in results.items():
+        sys.stdout.write(_summary_text(name, args.backend, result, use_color=use_color))
     return 0
 
 

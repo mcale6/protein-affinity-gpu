@@ -12,14 +12,17 @@ def generate_sphere_points(n: int) -> jnp.ndarray:
     """Generate approximately even sphere points with a golden spiral."""
     if n <= 0:
         return jnp.zeros((0, 3))
-    if n == 1:
-        return jnp.array([[0.0, 1.0, 0.0]])
 
+    # Midpoint Fibonacci spacing along the Z axis — matches freesasa's
+    # sasa_sr.c test_points(). Endpoint spacing collapses two indices onto
+    # the poles, and Y-axis ordering rotates the spiral relative to the
+    # molecule versus freesasa's Z ordering; either divergence shifts
+    # per-atom SASA enough to flip residues across the NIS threshold.
     indices = jnp.arange(n, dtype=jnp.float32)
-    y = 1.0 - (2.0 * indices) / (n - 1)
-    radius = jnp.sqrt(1 - y**2)
+    z = 1.0 - (2.0 * indices + 1.0) / n
+    radius = jnp.sqrt(1.0 - z * z)
     theta = jnp.pi * (3.0 - jnp.sqrt(5.0)) * indices
-    return jnp.stack([radius * jnp.cos(theta), y, radius * jnp.sin(theta)], axis=1)
+    return jnp.stack([radius * jnp.cos(theta), radius * jnp.sin(theta), z], axis=1)
 
 @jit
 def calculate_sasa(
@@ -139,14 +142,12 @@ def generate_sphere_points_tinygrad(n: int):
     """Golden-spiral sphere points as a tinygrad Tensor."""
     if n <= 0:
         return _TGTensor.zeros((0, 3))
-    if n == 1:
-        return _TGTensor([[0.0, 1.0, 0.0]])
 
     indices = np.arange(n, dtype=np.float32)
-    y = 1.0 - (2.0 * indices) / (n - 1)
-    radius = np.sqrt(1.0 - y * y)
+    z = 1.0 - (2.0 * indices + 1.0) / n
+    radius = np.sqrt(1.0 - z * z)
     theta = math.pi * (3.0 - math.sqrt(5.0)) * indices
-    points = np.stack([radius * np.cos(theta), y, radius * np.sin(theta)], axis=1).astype(np.float32)
+    points = np.stack([radius * np.cos(theta), radius * np.sin(theta), z], axis=1).astype(np.float32)
     return _TGTensor(points)
 
 
