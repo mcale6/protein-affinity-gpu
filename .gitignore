@@ -1,62 +1,36 @@
-# Compiled source #
-###################
-*.com
-*.class
-*.dll
-*.exe
-*.o
-*.so
-
-# Packages #
-############
-# it's better to unpack these files and commit the raw source
-# git has its own built in compression methods
-*.7z
-*.dmg
-*.gz
-*.iso
-*.jar
-*.rar
-*.tar
-*.zip
-
-# Logs and databases #
-######################
-*.log
-*.sql
-*.sqlite
-
-# OS generated files #
-######################
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# IDEs and editors #
-####################
-.vscode/
-.idea/
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
-.cursorignore
-
-# Python #
-##########
-*.pyc
-*.pyo
+# Python
 __pycache__/
+*.py[cod]
 *.so
 *.egg
-*.egg-info
-dist/
-results/
+*.egg-info/
+.python-version
+
+# Build artifacts
 build/
+dist/
 
+# Virtual environments
+.venv/
+venv/
+env/
 
+# Test and lint caches
+.coverage
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local outputs
+results/
+benchmarks/output/
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+Thumbs.db

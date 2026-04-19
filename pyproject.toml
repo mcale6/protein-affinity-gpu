@@ -3,36 +3,50 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "bio_lib"
+name = "protein-affinity-gpu"
 dynamic = ["version"]
-description = "A library for biological computations with JAX support"
-requires-python = ">=3.7"
+description = "Protein binding affinity prediction with CPU and JAX-backed workflows"
+requires-python = ">=3.10"
 authors = [{ name = "mcale6" }]
 dependencies = [
-    "numpy>=1.22.4,<2.0.0",
-    "jax",
-    "jaxlib",
     "biopython",
     "prodigy-prot",
-    "dm-tree",
-    "pandas",
-    "matplotlib"
+    "numpy>=1.23,<3.0"
 ]
 readme = "README.md"
 license = { file = "LICENSE" }
 
 [project.optional-dependencies]
-apple = ["jax-metal"]
+jax = ["jax", "jaxlib"]
+bench = ["matplotlib", "pandas"]
+dev = ["build", "pytest>=8.0", "ruff>=0.6"]
 
 [project.scripts]
-run-prodigy-custom = "bio_lib.run_prodigy_custom:main"
+protein-affinity-predict = "protein_affinity_gpu.cli.predict:main"
+protein-affinity-benchmark = "protein_affinity_gpu.cli.benchmark:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["bio_lib"]
-sources = ["src"]
+packages = ["src/protein_affinity_gpu"]
 
-[tool.hatch.build]
-packages = ["src/bio_lib"]
+[tool.hatch.build.targets.sdist]
+include = [
+    ".github/workflows/ci.yml",
+    "README.md",
+    "LICENSE",
+    "benchmarks/**",
+    "pyproject.toml",
+    "src/protein_affinity_gpu/**",
+    "tests/**",
+    "update_pkg.sh",
+]
 
 [tool.hatch.version]
-path = "src/bio_lib/version.py"
+path = "src/protein_affinity_gpu/version.py"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
