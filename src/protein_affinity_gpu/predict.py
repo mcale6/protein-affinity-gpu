@@ -230,6 +230,7 @@ def predict_binding_affinity_jax(
     quiet: bool = True,
     soft_sasa: bool = False,
     soft_beta: float = 10.0,
+    mode: Literal["block", "single", "scan"] = "block",
 ) -> ProdigyResults:
     """Run the PRODIGY IC-NIS pipeline on JAX.
 
@@ -237,11 +238,16 @@ def predict_binding_affinity_jax(
     sharpness ``soft_beta`` — meaningful gradients w.r.t. coords / radii at the
     cost of some accuracy (β→∞ recovers the hard kernel). Intended for
     training / differentiable design; leave off for straight inference.
+
+    ``mode`` selects the SASA dispatch: ``"block"`` (per-block Python loop —
+    bounded scratch), ``"single"`` (one fused ``@jit``, ``[N, M, N]`` scratch),
+    or ``"scan"`` (``jax.lax.scan`` over blocks, AlphaFold-style; pairs with
+    ``jax.checkpoint`` for memory-efficient backprop).
     """
     from .backends._jax import JAXAdapter
 
     return _run_pipeline(
-        JAXAdapter(soft_sasa=soft_sasa, soft_beta=soft_beta),
+        JAXAdapter(soft_sasa=soft_sasa, soft_beta=soft_beta, mode=mode),
         struct_path=struct_path,
         selection=selection,
         distance_cutoff=distance_cutoff,

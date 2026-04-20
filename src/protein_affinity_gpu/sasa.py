@@ -224,6 +224,222 @@ def calculate_sasa_batch_soft(
     return areas * (accessible_counts / n_points)
 
 
+# --- JAX single-pass + scan variants -------------------------------------
+#
+# These are alternatives to the per-block Python-dispatch path above:
+#
+# - ``_calculate_sasa_jax_impl`` is a fully-fused single-pass kernel — direct
+#   analog of ``_calculate_sasa_tinygrad_impl``. One ``@jit``, one XLA program;
+#   peak scratch is ``[N, M, N]`` so this is the fast path only when that fits
+#   on the device. On GPU it lets XLA pick its own tiling.
+# - ``_dispatch_blocked_jax_scan`` uses ``jax.lax.scan`` so the entire blocked
+#   sweep compiles as one program — same memory profile as the Python-loop
+#   dispatcher but no per-block Python latency, and the pattern AlphaFold uses
+#   (``layer_stack`` over Evoformer blocks) so ``jax.checkpoint`` plugs in
+#   cleanly for memory-efficient backprop.
+
+@jit
+def _calculate_sasa_jax_impl(
+    coords: jnp.ndarray,
+    vdw_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    sphere_points: jnp.ndarray,
+    probe_radius: float = 1.4,
+) -> jnp.ndarray:
+    """Fully vectorized Shrake–Rupley SASA — single ``@jit`` pass, no block loop."""
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
+    n_atoms = coords.shape[0]
+    n_points = sphere_points.shape[0]
+
+    dot_nn = masked_coords @ masked_coords.T
+    dist2_inter = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn
+    radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2
+    not_eye = ~jnp.eye(n_atoms, dtype=jnp.bool_)
+    interaction_matrix = (dist2_inter <= radsum2) & not_eye
+
+    scaled = sphere_points[None, :, :] * radii_with_probe[:, None, None] + masked_coords[:, None, :]
+    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)
+    dot = jnp.einsum("nms,ks->nmk", scaled, masked_coords)
+    dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
+
+    is_buried = (dist2 <= radii_probe_sq[None, None, :]) & interaction_matrix[:, None, :]
+    buried = jnp.any(is_buried, axis=-1).sum(axis=-1)
+    n_accessible = n_points - buried
+    areas = 4.0 * jnp.pi * radii_probe_sq
+    return areas * (n_accessible / n_points)
+
+
+@jit
+def _calculate_sasa_jax_soft_impl(
+    coords: jnp.ndarray,
+    vdw_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    sphere_points: jnp.ndarray,
+    beta: jnp.ndarray,
+    probe_radius: float = 1.4,
+) -> jnp.ndarray:
+    """Differentiable single-pass SASA. β→∞ recovers :func:`_calculate_sasa_jax_impl`."""
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
+    n_atoms = coords.shape[0]
+    n_points = sphere_points.shape[0]
+
+    dot_nn = masked_coords @ masked_coords.T
+    dist2_inter = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn
+    radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2
+    not_eye = ~jnp.eye(n_atoms, dtype=jnp.bool_)
+    interaction_matrix = (dist2_inter <= radsum2) & not_eye
+
+    scaled = sphere_points[None, :, :] * radii_with_probe[:, None, None] + masked_coords[:, None, :]
+    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)
+    dot = jnp.einsum("nms,ks->nmk", scaled, masked_coords)
+    dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
+
+    margin = radii_probe_sq[None, None, :] - dist2
+    log_not_occluded = -jax.nn.softplus(beta * margin)
+    log_not_occluded = jnp.where(interaction_matrix[:, None, :], log_not_occluded, 0.0)
+    log_not_buried = log_not_occluded.sum(axis=-1)
+    n_accessible = jnp.exp(log_not_buried).sum(axis=-1)
+    areas = 4.0 * jnp.pi * radii_probe_sq
+    return areas * (n_accessible / n_points)
+
+
+def calculate_sasa_jax(
+    coords: jnp.ndarray,
+    vdw_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    sphere_points: jnp.ndarray,
+    probe_radius: float = 1.4,
+) -> jnp.ndarray:
+    """Single-pass JAX SASA — fastest when ``[N, M, N]`` scratch fits on device."""
+    return _calculate_sasa_jax_impl(coords, vdw_radii, mask, sphere_points, probe_radius)
+
+
+def calculate_sasa_jax_soft(
+    coords: jnp.ndarray,
+    vdw_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    sphere_points: jnp.ndarray,
+    probe_radius: float = 1.4,
+    beta: float = 10.0,
+) -> jnp.ndarray:
+    """Differentiable single-pass JAX SASA."""
+    return _calculate_sasa_jax_soft_impl(
+        coords, vdw_radii, mask, sphere_points,
+        jnp.asarray(beta, dtype=jnp.float32), probe_radius,
+    )
+
+
+def _scan_block_starts(n_atoms: int, block_size: int) -> tuple[np.ndarray, int]:
+    """``effective_starts`` array for ``lax.scan`` over uniform block windows."""
+    block_size = max(1, min(int(block_size), n_atoms))
+    n_blocks = (n_atoms + block_size - 1) // block_size
+    starts = np.array(
+        [min(i * block_size, n_atoms - block_size) for i in range(n_blocks)],
+        dtype=np.int32,
+    )
+    return starts, block_size
+
+
+def _dispatch_blocked_jax_scan(
+    kernel: Callable,
+    masked_coords: jnp.ndarray,
+    radii_with_probe: jnp.ndarray,
+    coords_norm2: jnp.ndarray,
+    radii_probe_sq: jnp.ndarray,
+    sphere_points: jnp.ndarray,
+    block_size: int,
+    *extra_kernel_args,
+) -> jnp.ndarray:
+    """Same blocked sweep as :func:`_dispatch_blocked_jax`, fused into one ``lax.scan``.
+
+    Compiles once per ``(N, block_size, M)``, no per-block Python dispatch.
+    Differentiable; wrap the ``body`` with ``jax.checkpoint`` for ``O(carry)``
+    memory training (AlphaFold pattern).
+    """
+    n_atoms = masked_coords.shape[0]
+    starts_np, block_size = _scan_block_starts(n_atoms, block_size)
+    starts = jnp.asarray(starts_np)
+    n_blocks = starts.shape[0]
+    arange_b = jnp.arange(block_size, dtype=jnp.int32)
+
+    def body(_carry, eff_start):
+        block_coords = jax.lax.dynamic_slice_in_dim(masked_coords, eff_start, block_size, axis=0)
+        block_radii = jax.lax.dynamic_slice_in_dim(radii_with_probe, eff_start, block_size, axis=0)
+        block_abs_idx = eff_start + arange_b
+        counts = kernel(
+            block_coords, block_radii, block_abs_idx,
+            masked_coords, coords_norm2, radii_with_probe, radii_probe_sq,
+            sphere_points, *extra_kernel_args,
+        )
+        return _carry, counts
+
+    _, all_counts = jax.lax.scan(body, None, starts)  # [n_blocks, block_size]
+
+    # Stitch valid windows. Only the last block can overlap (effective_start
+    # was pulled back); take all rows of the leading n_blocks-1 blocks plus
+    # the unique tail of the last.
+    if n_blocks == 1:
+        return all_counts[0, :n_atoms]
+    last_eff = int(starts_np[-1])
+    last_start = (n_blocks - 1) * block_size
+    write_offset = last_start - last_eff
+    head = all_counts[:-1].reshape(-1)
+    tail = all_counts[-1, write_offset:]
+    return jnp.concatenate([head, tail])
+
+
+def calculate_sasa_batch_scan(
+    coords: jnp.ndarray,
+    vdw_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    block_size: int,
+    sphere_points: jnp.ndarray,
+    probe_radius: float = 1.4,
+) -> jnp.ndarray:
+    """Blocked Shrake–Rupley SASA — :func:`calculate_sasa_batch` via ``lax.scan``."""
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
+    buried_counts = _dispatch_blocked_jax_scan(
+        _sasa_block_kernel,
+        masked_coords, radii_with_probe, coords_norm2, radii_probe_sq,
+        sphere_points, block_size,
+    )
+    n_points = sphere_points.shape[0]
+    n_accessible = n_points - buried_counts
+    areas = 4.0 * jnp.pi * radii_probe_sq
+    return areas * (n_accessible / n_points)
+
+
+def calculate_sasa_batch_scan_soft(
+    coords: jnp.ndarray,
+    vdw_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    block_size: int,
+    sphere_points: jnp.ndarray,
+    probe_radius: float = 1.4,
+    beta: float = 10.0,
+) -> jnp.ndarray:
+    """Differentiable blocked SASA via ``lax.scan``."""
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
+    beta_array = jnp.asarray(beta, dtype=jnp.float32)
+    accessible_counts = _dispatch_blocked_jax_scan(
+        _soft_sasa_block_kernel,
+        masked_coords, radii_with_probe, coords_norm2, radii_probe_sq,
+        sphere_points, block_size,
+        beta_array,
+    )
+    n_points = sphere_points.shape[0]
+    areas = 4.0 * jnp.pi * radii_probe_sq
+    return areas * (accessible_counts / n_points)
+
+
 # --- Tinygrad ------------------------------------------------------------
 
 def _calculate_sasa_tinygrad_impl(

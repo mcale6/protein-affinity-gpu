@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 from functools import cached_property
+from typing import Literal
 
 import jax
 import jax.numpy as jnp
@@ -11,7 +12,11 @@ import numpy as np
 from ..contacts import calculate_residue_contacts
 from ..sasa import (
     calculate_sasa_batch,
+    calculate_sasa_batch_scan,
+    calculate_sasa_batch_scan_soft,
     calculate_sasa_batch_soft,
+    calculate_sasa_jax,
+    calculate_sasa_jax_soft,
     generate_sphere_points,
 )
 from ..scoring import NIS_COEFFICIENTS
@@ -19,13 +24,34 @@ from ..utils._array import Array
 from ..utils.residue_classification import ResidueClassification
 from ..utils.residue_library import default_library as residue_library
 
+SasaMode = Literal["block", "single", "scan"]
+
 
 class JAXAdapter:
-    """Backend adapter for :mod:`jax`. Supports optional soft-SASA kernel."""
+    """Backend adapter for :mod:`jax`. Supports optional soft-SASA kernel.
 
-    def __init__(self, *, soft_sasa: bool = False, soft_beta: float = 10.0) -> None:
+    ``mode`` selects the SASA dispatch strategy:
+
+    - ``"block"`` (default) — Python-loop dispatch over a ``@jit``'d per-block
+      kernel. Bounded ``[B, M, N]`` scratch; works for any N that fits in RAM.
+    - ``"single"`` — fully-fused single ``@jit``. One XLA program, no Python
+      loop; peak scratch ``[N, M, N]`` so limited by device memory.
+    - ``"scan"`` — same per-block kernel as ``"block"``, dispatched via
+      ``jax.lax.scan`` so the whole sweep compiles as one program. Matches
+      AlphaFold's layer_stack pattern; wrap the scan body with
+      ``jax.checkpoint`` for memory-efficient backprop.
+    """
+
+    def __init__(
+        self,
+        *,
+        soft_sasa: bool = False,
+        soft_beta: float = 10.0,
+        mode: SasaMode = "block",
+    ) -> None:
         self._soft_sasa = soft_sasa
         self._soft_beta = soft_beta
+        self._mode = mode
 
     @property
     def name(self) -> str:
@@ -138,13 +164,14 @@ class JAXAdapter:
         sphere_points: Array,
         block_size: int | None,
     ) -> Array:
-        sasa_fn = calculate_sasa_batch_soft if self._soft_sasa else calculate_sasa_batch
+        common = dict(coords=coords, vdw_radii=vdw_radii, mask=mask, sphere_points=sphere_points)
+        if self._mode == "single":
+            if self._soft_sasa:
+                return calculate_sasa_jax_soft(**common, beta=self._soft_beta)
+            return calculate_sasa_jax(**common)
+        if self._mode == "scan":
+            sasa_fn = calculate_sasa_batch_scan_soft if self._soft_sasa else calculate_sasa_batch_scan
+        else:
+            sasa_fn = calculate_sasa_batch_soft if self._soft_sasa else calculate_sasa_batch
         kwargs = {"beta": self._soft_beta} if self._soft_sasa else {}
-        return sasa_fn(
-            coords=coords,
-            vdw_radii=vdw_radii,
-            mask=mask,
-            block_size=block_size,
-            sphere_points=sphere_points,
-            **kwargs,
-        )
+        return sasa_fn(block_size=block_size, **common, **kwargs)
