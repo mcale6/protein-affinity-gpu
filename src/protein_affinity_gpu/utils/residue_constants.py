@@ -813,6 +813,13 @@ restype_atom14_mask = np.zeros([21, 14], dtype=np.float32)
 restype_atom14_rigid_group_positions = np.zeros([21, 14, 3], dtype=np.float32)
 restype_rigid_group_default_frame = np.zeros([21, 8, 4, 4], dtype=np.float32)
 
+# Gather indices between atom37 and atom14 layouts. Invalid slots map to
+# index 0; the corresponding atom14 mask entry is 0 so no real data flows
+# through those positions. Used by SASA compaction and any AlphaFold-style
+# pipeline that wants dense 14-column atom tensors.
+restype_atom14_to_atom37 = np.zeros([21, 14], dtype=np.int32)
+restype_atom37_to_atom14 = np.zeros([21, 37], dtype=np.int32)
+
 
 def _make_rigid_group_constants():
   """Fill the arrays above."""
@@ -883,6 +890,21 @@ def _make_rigid_group_constants():
 
 
 _make_rigid_group_constants()
+
+
+def _make_atom14_gather_indices():
+  """Populate ``restype_atom14_to_atom37`` and its inverse from atom14 names."""
+  for restype, restype_letter in enumerate(restypes):
+    resname = restype_1to3[restype_letter]
+    for atom14_idx, atom_name in enumerate(restype_name_to_atom14_names[resname]):
+      if not atom_name:
+        continue
+      atom37_idx = atom_order[atom_name]
+      restype_atom14_to_atom37[restype, atom14_idx] = atom37_idx
+      restype_atom37_to_atom14[restype, atom37_idx] = atom14_idx
+
+
+_make_atom14_gather_indices()
 
 
 def make_atom14_dists_bounds(overlap_tolerance=1.5,

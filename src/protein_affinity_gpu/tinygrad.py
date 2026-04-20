@@ -27,13 +27,19 @@ from .scoring import (
 )
 from .structure import load_complex
 from .utils import residue_constants
+from .utils.atom14 import (
+    compact_atom37_to_atom14_numpy,
+    expand_atom14_to_atom37_numpy,
+)
 from .utils.residue_classification import ResidueClassification
 from .utils.residue_library import default_library as residue_library
 
 LOGGER = get_logger(__name__)
 
-_ATOMS_PER_RESIDUE = residue_constants.atom_type_num
-_RESIDUE_RADII_MATRIX = Tensor(np.asarray(residue_library.radii_matrix, dtype=np.float32))
+_ATOMS_PER_RESIDUE_ATOM14 = 14
+_RESIDUE_RADII_MATRIX_ATOM14 = Tensor(
+    np.asarray(residue_library.radii_matrix_atom14, dtype=np.float32)
+)
 _RELATIVE_SASA_ARRAY = Tensor(
     np.asarray(ResidueClassification().relative_sasa_array, dtype=np.float32)
 )
@@ -47,12 +53,13 @@ _COEFFS, _INTERCEPT = coefficient_tensors_tinygrad()
 
 
 def _one_hot(indices: np.ndarray, num_classes: int) -> Tensor:
-    """Numpy-built one-hot (tinygrad lacks a direct ``jax.nn.one_hot`` equivalent)."""
-    indices = np.asarray(indices, dtype=np.int64)
-    onehot = np.zeros((indices.shape[0], num_classes), dtype=np.float32)
-    valid = (indices >= 0) & (indices < num_classes)
-    onehot[np.arange(indices.shape[0])[valid], indices[valid]] = 1.0
-    return Tensor(onehot)
+    """One-hot via ``Tensor.one_hot`` — invalid (negative / OOB) indices → zero row.
+
+    ``Tensor.one_hot`` compares each index against ``arange(num_classes)`` and
+    emits ``1`` on equality, so ``-1`` padding naturally produces a zero row
+    without special-casing on CPU first.
+    """
+    return Tensor(np.asarray(indices, dtype=np.int64)).one_hot(num_classes).float()
 
 
 def _device_name() -> str:
@@ -64,15 +71,15 @@ def _device_name() -> str:
 
 
 def estimate_optimal_block_size(n_atoms: int) -> int:
-    """Memory-friendly block size for the batched SASA kernel on accelerators.
+    """Amortize per-block kernel-launch overhead on accelerators.
 
-    Target: keep the per-block scratch tensor ``[block, M=100, N]`` under ~1GB
-    (floats), which lets Metal/CUDA fuse one kernel per block. With the
-    dot-product formulation the peak is ``block * 100 * n_atoms * 4B``.
+    Empirically on Apple Metal (M-series), throughput improves monotonically
+    up to ``block ≈ 768`` for 1A2K-sized complexes: 152→9.3s, 256→6.8s,
+    512→3.5s, 768→2.3s, 1024→7.3s. Past 768 Metal starts spilling the
+    [block, 100, N] float32 scratch — about 5GB — out of the fast L2/MMU
+    path. The cap stays at 768; for smaller proteins it clamps to N.
     """
-    target_elements = 250_000_000  # ~1GB of float32 scratch per block
-    block_size = max(32, target_elements // (100 * max(n_atoms, 1)))
-    return min(block_size, n_atoms, 1024)
+    return min(768, n_atoms)
 
 
 def predict_binding_affinity_tinygrad(
@@ -93,25 +100,52 @@ def predict_binding_affinity_tinygrad(
     device = _device_name()
     sphere_points_tensor = generate_sphere_points_tinygrad(sphere_points)
 
-    target_positions = Tensor(np.asarray(target.atom_positions, dtype=np.float32))
-    binder_positions = Tensor(np.asarray(binder.atom_positions, dtype=np.float32))
-    target_mask = Tensor(np.asarray(target.atom_mask, dtype=np.float32))
-    binder_mask = Tensor(np.asarray(binder.atom_mask, dtype=np.float32))
+    # Contacts use the full atom37 layout — 37×37 residue-pair checks are cheap
+    # relative to the SASA kernel, and the analytic atom types (N, CA, etc.)
+    # are referenced by their atom37 slot downstream.
+    target_positions_37 = Tensor(np.asarray(target.atom_positions, dtype=np.float32))
+    binder_positions_37 = Tensor(np.asarray(binder.atom_positions, dtype=np.float32))
+    target_mask_37 = Tensor(np.asarray(target.atom_mask, dtype=np.float32))
+    binder_mask_37 = Tensor(np.asarray(binder.atom_mask, dtype=np.float32))
+
+    # Compact atom37 → atom14 for the SASA kernel. ~4.4× fewer atoms
+    # (avg 8.35 real atoms per residue packed into 14 slots vs 37).
+    target_aatype_np = np.asarray(target.aatype)
+    binder_aatype_np = np.asarray(binder.aatype)
+    target_pos14, target_mask14 = compact_atom37_to_atom14_numpy(
+        np.asarray(target.atom_positions, dtype=np.float32),
+        np.asarray(target.atom_mask, dtype=np.float32),
+        target_aatype_np,
+    )
+    binder_pos14, binder_mask14 = compact_atom37_to_atom14_numpy(
+        np.asarray(binder.atom_positions, dtype=np.float32),
+        np.asarray(binder.atom_mask, dtype=np.float32),
+        binder_aatype_np,
+    )
+    target_positions_14 = Tensor(target_pos14)
+    binder_positions_14 = Tensor(binder_pos14)
+    target_mask_14 = Tensor(target_mask14)
+    binder_mask_14 = Tensor(binder_mask14)
 
     complex_positions = Tensor.cat(
-        target_positions.reshape(-1, 3),
-        binder_positions.reshape(-1, 3),
+        target_positions_14.reshape(-1, 3),
+        binder_positions_14.reshape(-1, 3),
         dim=0,
     )
-    complex_mask = Tensor.cat(target_mask.reshape(-1), binder_mask.reshape(-1), dim=0)
+    complex_mask = Tensor.cat(
+        target_mask_14.reshape(-1), binder_mask_14.reshape(-1), dim=0
+    )
 
     num_classes = len(residue_constants.restypes)
-    target_sequence = _one_hot(np.asarray(target.aatype), num_classes)
-    binder_sequence = _one_hot(np.asarray(binder.aatype), num_classes)
+    target_sequence = _one_hot(target_aatype_np, num_classes)
+    binder_sequence = _one_hot(binder_aatype_np, num_classes)
     total_sequence = Tensor.cat(target_sequence, binder_sequence, dim=0)
+    # ``radii_matrix_atom14`` already has 0 in padding slots, so we don't
+    # need to re-apply the atom14 mask here — the SASA kernel will do its
+    # own ``radii * mask`` internally.
     complex_radii = Tensor.cat(
-        get_atom_radii_tinygrad(target_sequence, _RESIDUE_RADII_MATRIX),
-        get_atom_radii_tinygrad(binder_sequence, _RESIDUE_RADII_MATRIX),
+        get_atom_radii_tinygrad(target_sequence, _RESIDUE_RADII_MATRIX_ATOM14),
+        get_atom_radii_tinygrad(binder_sequence, _RESIDUE_RADII_MATRIX_ATOM14),
         dim=0,
     )
 
@@ -120,10 +154,10 @@ def predict_binding_affinity_tinygrad(
 
     with log_duration(LOGGER, "tinygrad.contacts"):
         contacts = calculate_residue_contacts_tinygrad(
-            target_positions,
-            binder_positions,
-            target_mask,
-            binder_mask,
+            target_positions_37,
+            binder_positions_37,
+            target_mask_37,
+            binder_mask_37,
             distance_cutoff=distance_cutoff,
         )
         contact_types = analyze_contacts_tinygrad(
@@ -155,7 +189,7 @@ def predict_binding_affinity_tinygrad(
             complex_sasa=complex_sasa,
             sequence_probabilities=total_sequence,
             relative_sasa_array=_RELATIVE_SASA_ARRAY,
-            atoms_per_residue=_ATOMS_PER_RESIDUE,
+            atoms_per_residue=_ATOMS_PER_RESIDUE_ATOM14,
         )
         nis_percentages = calculate_nis_percentages_tinygrad(
             sasa_values=relative_sasa,
@@ -164,32 +198,41 @@ def predict_binding_affinity_tinygrad(
             threshold=acc_threshold,
         )
 
-    contact_types_np = contact_types.numpy()
-    nis_np = nis_percentages.numpy()
-
     with log_duration(LOGGER, "tinygrad.score"):
         dg = score_ic_nis_tinygrad(
-            Tensor(float(contact_types_np[1])),
-            Tensor(float(contact_types_np[3])),
-            Tensor(float(contact_types_np[2])),
-            Tensor(float(contact_types_np[4])),
-            Tensor(float(nis_np[0])),
-            Tensor(float(nis_np[1])),
+            contact_types[1],
+            contact_types[3],
+            contact_types[2],
+            contact_types[4],
+            nis_percentages[0],
+            nis_percentages[1],
             _COEFFS,
             _INTERCEPT,
         )
         kd = dg_to_kd_tinygrad(dg, temperature=temperature)
 
+    # Single materialization pass — downstream is numpy-only (record assembly,
+    # dataclass construction). Keeps the compute graph connected through
+    # scoring so tinygrad can fuse across contacts → NIS → ΔG.
+    contact_types_np = contact_types.numpy()
+    nis_np = nis_percentages.numpy()
+    complex_sasa_np = complex_sasa.numpy()
+    relative_sasa_np = relative_sasa.numpy()
+    dg_value = float(dg.numpy().reshape(-1)[0])
+    kd_value = float(kd.numpy().reshape(-1)[0])
+
+    # Scatter atom14 SASA back to atom37 for per-atom reporting.
+    all_aatype_np = np.concatenate([target_aatype_np, binder_aatype_np])
+    complex_sasa_37 = expand_atom14_to_atom37_numpy(
+        complex_sasa_np, all_aatype_np
+    ).reshape(-1)
     sasa_data = build_sasa_records(
-        complex_sasa=np.asarray(complex_sasa.numpy()),
-        relative_sasa=np.asarray(relative_sasa.numpy()),
+        complex_sasa=complex_sasa_37,
+        relative_sasa=relative_sasa_np,
         target=target,
         binder=binder,
         chain_labels=(target_chain, binder_chain),
     )
-
-    dg_value = float(np.asarray(dg.numpy()).reshape(-1)[0])
-    kd_value = float(np.asarray(kd.numpy()).reshape(-1)[0])
     results = ProdigyResults(
         contact_types=ContactAnalysis(contact_types_np.tolist()),
         binding_affinity=np.float32(dg_value),
