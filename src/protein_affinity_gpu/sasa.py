@@ -279,7 +279,20 @@ def _sasa_block_tinygrad_impl(
     return (n_points - buried_points).cast(_tg_dtypes.float32).realize()
 
 
-_sasa_block_tinygrad = _TGTinyJit(_sasa_block_tinygrad_impl)
+# TinyJit captures each input tensor's shape on its first trace and errors
+# on subsequent calls whose shapes differ. For the batched SASA kernel the
+# signature (B, N, M) is fixed per structure/block-size but varies across
+# structures in a benchmark loop, so we cache one JIT per shape triple.
+_sasa_block_jit_cache: dict[tuple[int, int, int], "_TGTinyJit"] = {}
+
+
+def _get_sasa_block_jit(block_size: int, n_atoms: int, n_sphere_points: int):
+    key = (block_size, n_atoms, n_sphere_points)
+    jit = _sasa_block_jit_cache.get(key)
+    if jit is None:
+        jit = _TGTinyJit(_sasa_block_tinygrad_impl)
+        _sasa_block_jit_cache[key] = jit
+    return jit
 
 
 def calculate_sasa_batch_tinygrad(
@@ -294,7 +307,10 @@ def calculate_sasa_batch_tinygrad(
 
     Three moves that matter for Metal perf:
     - The per-block body is ``_TGTinyJit``-wrapped, so the compiled kernel is
-      cached after the first block; the remaining ~108 blocks hit the cache.
+      cached after the first block; the remaining blocks hit the cache.
+      A separate JIT is cached per (block, N, M) triple so repeated calls
+      across structures with different atom counts each get their own
+      compiled kernel instead of tripping TinyJit's shape-mismatch check.
     - No per-block ``.realize()``. Each JIT call already returns a realized
       buffer, so the outer accumulator builds a shallow 1-level graph over
       those buffers — cat of leaves, safe vs ``graph_rewrite stack too big``.
@@ -314,6 +330,7 @@ def calculate_sasa_batch_tinygrad(
     n_atoms = coords.shape[0]
     n_points = sphere_points.shape[0]
     block_size = max(1, min(int(block_size), n_atoms))
+    sasa_block_jit = _get_sasa_block_jit(block_size, n_atoms, n_points)
 
     block_slices = []
     for start in range(0, n_atoms, block_size):
@@ -329,7 +346,7 @@ def calculate_sasa_batch_tinygrad(
             np.arange(effective_start, effective_start + block_size, dtype=np.int32)
         ).realize()
 
-        block_out = _sasa_block_tinygrad(
+        block_out = sasa_block_jit(
             block_coords,
             block_radii,
             block_abs_idx,
