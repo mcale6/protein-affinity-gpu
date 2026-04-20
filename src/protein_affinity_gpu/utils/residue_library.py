@@ -21,6 +21,7 @@ class ResidueLibrary:
         self.residue_atoms = defaultdict(dict)
         self._parse_library(library_text)
         self.radii_matrix = self._build_radii_matrix()
+        self.radii_matrix_atom14 = self._build_radii_matrix_atom14()
 
     def _parse_library(self, text: str):
         current_residue = None
@@ -59,7 +60,7 @@ class ResidueLibrary:
         Array of shape [n_residue_types, n_atoms] containing radii values
         """
         from . import residue_constants
-        
+
         radii_by_aa: Dict[str, list[float]] = {}
         for aa in residue_constants.restypes:
             res_name = residue_constants.restype_1to3[aa]
@@ -68,5 +69,26 @@ class ResidueLibrary:
                 for atom_name in residue_constants.atom_types
             ]
         return np.array([radii_by_aa[aa] for aa in residue_constants.restypes])
+
+    def _build_radii_matrix_atom14(self) -> np.ndarray:
+        """Same as ``radii_matrix`` but packed into the atom14 layout.
+
+        Empty atom14 slots (padding past the residue's real atom count) get
+        radius 0 so the SASA probe radius collapses to the probe alone — then
+        the atom14 mask zeros them out entirely.
+        """
+        from . import residue_constants
+
+        radii = np.zeros((residue_constants.restype_num, 14), dtype=np.float32)
+        for restype_idx, aa in enumerate(residue_constants.restypes):
+            res_name = residue_constants.restype_1to3[aa]
+            atom14_names = residue_constants.restype_name_to_atom14_names[res_name]
+            for slot, atom_name in enumerate(atom14_names):
+                if not atom_name:
+                    continue
+                radii[restype_idx, slot] = self.get_radius(
+                    res_name, atom_name, atom_name[0]
+                )
+        return radii
 
 default_library = ResidueLibrary()

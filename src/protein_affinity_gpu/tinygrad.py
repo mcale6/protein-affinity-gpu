@@ -27,13 +27,19 @@ from .scoring import (
 )
 from .structure import load_complex
 from .utils import residue_constants
+from .utils.atom14 import (
+    compact_atom37_to_atom14_numpy,
+    expand_atom14_to_atom37_numpy,
+)
 from .utils.residue_classification import ResidueClassification
 from .utils.residue_library import default_library as residue_library
 
 LOGGER = get_logger(__name__)
 
-_ATOMS_PER_RESIDUE = residue_constants.atom_type_num
-_RESIDUE_RADII_MATRIX = Tensor(np.asarray(residue_library.radii_matrix, dtype=np.float32))
+_ATOMS_PER_RESIDUE_ATOM14 = 14
+_RESIDUE_RADII_MATRIX_ATOM14 = Tensor(
+    np.asarray(residue_library.radii_matrix_atom14, dtype=np.float32)
+)
 _RELATIVE_SASA_ARRAY = Tensor(
     np.asarray(ResidueClassification().relative_sasa_array, dtype=np.float32)
 )
@@ -94,25 +100,52 @@ def predict_binding_affinity_tinygrad(
     device = _device_name()
     sphere_points_tensor = generate_sphere_points_tinygrad(sphere_points)
 
-    target_positions = Tensor(np.asarray(target.atom_positions, dtype=np.float32))
-    binder_positions = Tensor(np.asarray(binder.atom_positions, dtype=np.float32))
-    target_mask = Tensor(np.asarray(target.atom_mask, dtype=np.float32))
-    binder_mask = Tensor(np.asarray(binder.atom_mask, dtype=np.float32))
+    # Contacts use the full atom37 layout — 37×37 residue-pair checks are cheap
+    # relative to the SASA kernel, and the analytic atom types (N, CA, etc.)
+    # are referenced by their atom37 slot downstream.
+    target_positions_37 = Tensor(np.asarray(target.atom_positions, dtype=np.float32))
+    binder_positions_37 = Tensor(np.asarray(binder.atom_positions, dtype=np.float32))
+    target_mask_37 = Tensor(np.asarray(target.atom_mask, dtype=np.float32))
+    binder_mask_37 = Tensor(np.asarray(binder.atom_mask, dtype=np.float32))
+
+    # Compact atom37 → atom14 for the SASA kernel. ~4.4× fewer atoms
+    # (avg 8.35 real atoms per residue packed into 14 slots vs 37).
+    target_aatype_np = np.asarray(target.aatype)
+    binder_aatype_np = np.asarray(binder.aatype)
+    target_pos14, target_mask14 = compact_atom37_to_atom14_numpy(
+        np.asarray(target.atom_positions, dtype=np.float32),
+        np.asarray(target.atom_mask, dtype=np.float32),
+        target_aatype_np,
+    )
+    binder_pos14, binder_mask14 = compact_atom37_to_atom14_numpy(
+        np.asarray(binder.atom_positions, dtype=np.float32),
+        np.asarray(binder.atom_mask, dtype=np.float32),
+        binder_aatype_np,
+    )
+    target_positions_14 = Tensor(target_pos14)
+    binder_positions_14 = Tensor(binder_pos14)
+    target_mask_14 = Tensor(target_mask14)
+    binder_mask_14 = Tensor(binder_mask14)
 
     complex_positions = Tensor.cat(
-        target_positions.reshape(-1, 3),
-        binder_positions.reshape(-1, 3),
+        target_positions_14.reshape(-1, 3),
+        binder_positions_14.reshape(-1, 3),
         dim=0,
     )
-    complex_mask = Tensor.cat(target_mask.reshape(-1), binder_mask.reshape(-1), dim=0)
+    complex_mask = Tensor.cat(
+        target_mask_14.reshape(-1), binder_mask_14.reshape(-1), dim=0
+    )
 
     num_classes = len(residue_constants.restypes)
-    target_sequence = _one_hot(np.asarray(target.aatype), num_classes)
-    binder_sequence = _one_hot(np.asarray(binder.aatype), num_classes)
+    target_sequence = _one_hot(target_aatype_np, num_classes)
+    binder_sequence = _one_hot(binder_aatype_np, num_classes)
     total_sequence = Tensor.cat(target_sequence, binder_sequence, dim=0)
+    # ``radii_matrix_atom14`` already has 0 in padding slots, so we don't
+    # need to re-apply the atom14 mask here — the SASA kernel will do its
+    # own ``radii * mask`` internally.
     complex_radii = Tensor.cat(
-        get_atom_radii_tinygrad(target_sequence, _RESIDUE_RADII_MATRIX),
-        get_atom_radii_tinygrad(binder_sequence, _RESIDUE_RADII_MATRIX),
+        get_atom_radii_tinygrad(target_sequence, _RESIDUE_RADII_MATRIX_ATOM14),
+        get_atom_radii_tinygrad(binder_sequence, _RESIDUE_RADII_MATRIX_ATOM14),
         dim=0,
     )
 
@@ -121,10 +154,10 @@ def predict_binding_affinity_tinygrad(
 
     with log_duration(LOGGER, "tinygrad.contacts"):
         contacts = calculate_residue_contacts_tinygrad(
-            target_positions,
-            binder_positions,
-            target_mask,
-            binder_mask,
+            target_positions_37,
+            binder_positions_37,
+            target_mask_37,
+            binder_mask_37,
             distance_cutoff=distance_cutoff,
         )
         contact_types = analyze_contacts_tinygrad(
@@ -156,7 +189,7 @@ def predict_binding_affinity_tinygrad(
             complex_sasa=complex_sasa,
             sequence_probabilities=total_sequence,
             relative_sasa_array=_RELATIVE_SASA_ARRAY,
-            atoms_per_residue=_ATOMS_PER_RESIDUE,
+            atoms_per_residue=_ATOMS_PER_RESIDUE_ATOM14,
         )
         nis_percentages = calculate_nis_percentages_tinygrad(
             sasa_values=relative_sasa,
@@ -188,8 +221,13 @@ def predict_binding_affinity_tinygrad(
     dg_value = float(dg.numpy().reshape(-1)[0])
     kd_value = float(kd.numpy().reshape(-1)[0])
 
+    # Scatter atom14 SASA back to atom37 for per-atom reporting.
+    all_aatype_np = np.concatenate([target_aatype_np, binder_aatype_np])
+    complex_sasa_37 = expand_atom14_to_atom37_numpy(
+        complex_sasa_np, all_aatype_np
+    ).reshape(-1)
     sasa_data = build_sasa_records(
-        complex_sasa=complex_sasa_np,
+        complex_sasa=complex_sasa_37,
         relative_sasa=relative_sasa_np,
         target=target,
         binder=binder,
