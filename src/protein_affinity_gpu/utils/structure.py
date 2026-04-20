@@ -18,14 +18,14 @@ import dataclasses
 import io
 import logging
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Tuple
+from typing import Any, Iterable, Mapping, Optional
 
 import numpy as np
 from Bio import PDB
 from Bio.PDB import MMCIFParser, PDBParser, is_aa
 from Bio.PDB.Structure import Structure
 
-from .utils import residue_constants
+from . import residue_constants
 
 LOGGER = logging.getLogger(__name__)
 

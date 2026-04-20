@@ -17,8 +17,8 @@ for candidate in (ROOT, SRC):
 
 try:
     from protein_affinity_gpu.cpu import predict_binding_affinity  # noqa: E402
-    from protein_affinity_gpu.resources import collect_structure_files, format_duration  # noqa: E402
-    from protein_affinity_gpu.results import NumpyEncoder  # noqa: E402
+    from protein_affinity_gpu.utils.resources import collect_structure_files, format_duration  # noqa: E402
+    from protein_affinity_gpu.utils._array import NumpyEncoder  # noqa: E402
 except ModuleNotFoundError as exc:  # pragma: no cover - import-time guidance
     raise SystemExit(
         f"Missing Python dependency '{exc.name}'. "
@@ -30,13 +30,13 @@ LOGGER = logging.getLogger(__name__)
 
 
 def _load_jax_predictor():
-    from protein_affinity_gpu.jax import predict_binding_affinity_jax
+    from protein_affinity_gpu.predict import predict_binding_affinity_jax
 
     return predict_binding_affinity_jax
 
 
 def _load_tinygrad_predictor():
-    from protein_affinity_gpu.tinygrad import predict_binding_affinity_tinygrad
+    from protein_affinity_gpu.predict import predict_binding_affinity_tinygrad
 
     return predict_binding_affinity_tinygrad
 

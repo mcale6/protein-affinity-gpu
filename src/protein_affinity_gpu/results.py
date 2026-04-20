@@ -1,3 +1,6 @@
+"""Result dataclasses + SASA record assembly."""
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -6,43 +9,39 @@ from typing import Any
 import numpy as np
 
 from .utils import residue_constants
-
-
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):  # noqa: D401
-        if isinstance(obj, np.integer):
-            return int(obj)
-        if isinstance(obj, np.floating):
-            return float(obj)
-        if isinstance(obj, np.ndarray):
-            return obj.tolist()
-        if hasattr(obj, "tolist"):
-            return obj.tolist()
-        return super().default(obj)
+from .utils._array import Array, NumpyEncoder, to_numpy
+from .utils.structure import Protein
 
 
 def build_sasa_records(
-    complex_sasa: Any,
-    relative_sasa: Any,
-    target,
-    binder,
+    complex_sasa: Array,
+    relative_sasa: Array,
+    target: Protein,
+    binder: Protein,
     chain_labels: tuple[str, str],
 ) -> np.ndarray:
-    """Convert atom- and residue-level SASA values into a structured array."""
+    """Convert atom- and residue-level SASA values into a structured array.
+
+    ``complex_sasa`` / ``relative_sasa`` may be numpy, jax, or tinygrad arrays —
+    materialized via :func:`to_numpy`. All ``target`` / ``binder`` fields are
+    numpy already (they live on the :class:`Protein` dataclass).
+    """
+    complex_sasa = to_numpy(complex_sasa)
+    relative_sasa = to_numpy(relative_sasa)
+
     atom_types = np.array(residue_constants.atom_types)
     restype_lookup = np.array(
-        [residue_constants.restype_1to3[restype] for restype in residue_constants.restypes],
+        [residue_constants.restype_1to3[rt] for rt in residue_constants.restypes],
         dtype="U3",
     )
     atoms_per_residue = residue_constants.atom_type_num
-
     target_residue_count = len(target.aatype)
     binder_residue_count = len(binder.aatype)
     total_residues = target_residue_count + binder_residue_count
 
-    combined_mask = np.asarray(np.concatenate([target.atom_mask, binder.atom_mask]).ravel(), dtype=bool)
+    combined_mask = np.concatenate([target.atom_mask, binder.atom_mask]).ravel().astype(bool)
     residue_names = np.concatenate(
-        [restype_lookup[np.asarray(target.aatype)], restype_lookup[np.asarray(binder.aatype)]]
+        [restype_lookup[target.aatype], restype_lookup[binder.aatype]]
     )
     residue_indices = np.concatenate([target.residue_index, binder.residue_index]).astype(int)
     residue_chains = np.concatenate(
@@ -56,7 +55,7 @@ def build_sasa_records(
     chain_ids_atom = np.repeat(residue_chains, atoms_per_residue)
     residue_names_atom = np.repeat(residue_names, atoms_per_residue)
     residue_indices_atom = np.repeat(residue_indices, atoms_per_residue)
-    relative_sasa_atom = np.repeat(np.asarray(relative_sasa), atoms_per_residue)
+    relative_sasa_atom = np.repeat(relative_sasa, atoms_per_residue)
 
     dtype = [
         ("chain", "U2"),
@@ -66,17 +65,17 @@ def build_sasa_records(
         ("atom_sasa", "f4"),
         ("relative_sasa", "f4"),
     ]
-    filtered_rows = list(
+    rows = list(
         zip(
             chain_ids_atom[combined_mask],
             residue_names_atom[combined_mask],
             residue_indices_atom[combined_mask],
             atom_names[combined_mask],
-            np.asarray(complex_sasa)[combined_mask],
+            complex_sasa[combined_mask],
             relative_sasa_atom[combined_mask],
         )
     )
-    return np.array(filtered_rows, dtype=dtype)
+    return np.array(rows, dtype=dtype)
 
 
 @dataclass

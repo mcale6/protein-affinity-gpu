@@ -14,9 +14,11 @@ affinity prediction with three interchangeable backends:
   METAL, CUDA, CLANG, or the tinygrad CPU device via
   `predict_binding_affinity_tinygrad`.
 
-All backends share one data model ([`Protein`](../src/protein_affinity_gpu/structure.py),
+All backends share one data model ([`Protein`](../src/protein_affinity_gpu/utils/structure.py),
 [`ProdigyResults`](../src/protein_affinity_gpu/results.py)) so results are
-directly comparable.
+directly comparable. The JAX and tinygrad backends share a single pipeline
+in [`predict.py`](../src/protein_affinity_gpu/predict.py), parametrized by a
+[`BackendAdapter`](../src/protein_affinity_gpu/backends/_adapter.py).
 
 ---
 
@@ -27,11 +29,11 @@ directly comparable.
 | Install / quickstart | [README.md](../README.md) |
 | Package metadata | [pyproject.toml](../pyproject.toml) |
 | Python API root | [src/protein_affinity_gpu/__init__.py](../src/protein_affinity_gpu/__init__.py) |
+| Unified predictor | [src/protein_affinity_gpu/predict.py](../src/protein_affinity_gpu/predict.py) |
 | CPU predictor | [src/protein_affinity_gpu/cpu.py](../src/protein_affinity_gpu/cpu.py) |
-| JAX predictor | [src/protein_affinity_gpu/jax.py](../src/protein_affinity_gpu/jax.py) |
-| tinygrad predictor | [src/protein_affinity_gpu/tinygrad.py](../src/protein_affinity_gpu/tinygrad.py) |
-| Logging helpers | [src/protein_affinity_gpu/logging_utils.py](../src/protein_affinity_gpu/logging_utils.py) |
-| Structure loader | [src/protein_affinity_gpu/structure.py](../src/protein_affinity_gpu/structure.py) |
+| Backend adapters | [src/protein_affinity_gpu/backends/](../src/protein_affinity_gpu/backends/) |
+| Logging helpers | [src/protein_affinity_gpu/utils/logging_utils.py](../src/protein_affinity_gpu/utils/logging_utils.py) |
+| Structure loader | [src/protein_affinity_gpu/utils/structure.py](../src/protein_affinity_gpu/utils/structure.py) |
 | CLI — predict | [src/protein_affinity_gpu/cli/predict.py](../src/protein_affinity_gpu/cli/predict.py) |
 | CLI — benchmark | [src/protein_affinity_gpu/cli/benchmark.py](../src/protein_affinity_gpu/cli/benchmark.py) |
 | Benchmark harness | [benchmarks/run.py](../benchmarks/run.py) |
@@ -54,23 +56,28 @@ protein-affinity-gpu/
 │   ├── run.py                 # Standalone entry into the benchmark CLI
 │   └── fixtures/1A2K.pdb      # Canonical two-chain complex used by tests
 ├── src/protein_affinity_gpu/
-│   ├── __init__.py            # Public API (lazy-loads CPU / JAX impls)
+│   ├── __init__.py            # Public API (lazy-loads impls)
 │   ├── version.py             # __version__ (read by Hatch)
-│   ├── structure.py           # Protein dataclass, load_complex/load_structure
+│   ├── predict.py             # Unified pipeline + `predict(backend=…)` router + jax/tinygrad entry points
 │   ├── cpu.py                 # PRODIGY + freesasa CPU pipeline
-│   ├── jax.py                 # JAX pipeline, device/memory estimators
-│   ├── tinygrad.py            # tinygrad pipeline end-to-end
 │   ├── sasa.py                # SASA kernels (JAX + tinygrad, full + blocked)
-│   ├── contacts.py            # Residue contact + interaction class counts (JAX + tinygrad)
-│   ├── scoring.py             # PRODIGY IC-NIS coefficients & scoring (JAX + tinygrad)
+│   ├── contacts.py            # Residue contacts + interaction class counts
+│   ├── scoring.py             # NISCoefficients + backend-agnostic scoring primitives
 │   ├── results.py             # ProdigyResults / ContactAnalysis, JSON writer
-│   ├── resources.py           # Packaged-data helpers, file collection
-│   ├── logging_utils.py       # setup_logging, get_logger, log_duration
+│   ├── backends/
+│   │   ├── _adapter.py        # BackendAdapter Protocol
+│   │   ├── _jax.py            # JAXAdapter
+│   │   └── _tinygrad.py       # TinygradAdapter
 │   ├── cli/
 │   │   ├── predict.py         # `protein-affinity-predict`
 │   │   └── benchmark.py       # `protein-affinity-benchmark`
 │   ├── data/                  # naccess.config, vdw.radii, thomson*.xyz
 │   └── utils/
+│       ├── _array.py                  # Array TypeAlias, NumpyEncoder, concat/stack/exp shims
+│       ├── atom14.py                  # atom37 ↔ atom14 gather/scatter
+│       ├── logging_utils.py           # setup_logging, get_logger, log_duration
+│       ├── resources.py               # Packaged-data helpers, file collection
+│       ├── structure.py               # Protein dataclass, load_complex/load_structure
 │       ├── residue_constants.py       # AlphaFold-derived atom/residue tables
 │       ├── residue_classification.py  # IC / PROTORP character matrices, ASA refs
 │       └── residue_library.py         # VdW radii per (residue, atom)
@@ -91,15 +98,17 @@ from protein_affinity_gpu import (
     ContactAnalysis,
     load_structure,
     load_complex,
-    predict_binding_affinity,
+    predict,                           # unified router: backend="cpu"|"jax"|"tinygrad"
+    predict_binding_affinity,          # CPU-only (legacy alias)
     predict_binding_affinity_jax,
     predict_binding_affinity_tinygrad,
 )
 ```
 
-The `*_tinygrad` entry point is lazy-loaded at first call.
+Every backend entry point is lazy-loaded at first call so importing the
+package doesn't pull JAX *and* tinygrad into memory.
 
-### 3.1 Structure I/O — `structure.py`
+### 3.1 Structure I/O — `utils/structure.py`
 
 | Symbol | Purpose |
 |--------|---------|
@@ -126,7 +135,38 @@ predict_binding_affinity(
 - `execute_freesasa(structure, sphere_points)` is exposed for custom flows.
 - Uses the packaged `data/naccess.config` classifier.
 
-### 3.3 JAX pipeline — `jax.py`
+### 3.3 Unified pipeline — `predict.py`
+
+```python
+from protein_affinity_gpu import predict
+
+predict(
+    struct_path, backend="jax",       # "cpu" | "jax" | "tinygrad"
+    selection="A,B",
+    distance_cutoff=5.5, acc_threshold=0.05,
+    temperature=25.0, sphere_points=100,
+    save_results=False, output_dir=".", quiet=True,
+    # backend-specific extras flow through **backend_kwargs, e.g. soft_sasa=True
+) -> ProdigyResults
+```
+
+`_run_pipeline(adapter, …)` is the shared body consumed by both the router
+and the backend-specific shims below. Each phase (`load_complex`,
+`contacts`, `sasa`, `nis`, `score`) is wrapped in `log_duration`, so enabling
+debug logging prints a start / done-in-X.XXXs line per phase.
+
+### 3.3a Backend adapters — `backends/`
+
+The adapter Protocol ([`_adapter.py`](../src/protein_affinity_gpu/backends/_adapter.py))
+names the surface the pipeline calls. Concrete adapters own their
+device resolution, lazy constants, and kernel dispatch:
+
+| Adapter | Notable behavior |
+|---------|------------------|
+| `JAXAdapter` | `soft_sasa=True` swaps in the sigmoid SASA kernel; `validate_size` calls `nvidia-smi` on CUDA; block size uses an exp-decay fit on Metal, ~1 GB scratch target otherwise. |
+| `TinygradAdapter` | `METAL` / `CUDA` / `GPU` → batched SASA with `block=min(768, N)`; any other device (incl. `CPU` / `CLANG`) → full `calculate_sasa_tinygrad` kernel (`block_size=None`). |
+
+### 3.3b Backend entry points (in `predict.py`)
 
 ```python
 predict_binding_affinity_jax(
@@ -134,19 +174,9 @@ predict_binding_affinity_jax(
     distance_cutoff=5.5, acc_threshold=0.05,
     temperature=25.0, sphere_points=100,
     save_results=False, output_dir=".", quiet=True,
+    soft_sasa=False, soft_beta=10.0,
 ) -> ProdigyResults
-```
 
-Helpers used to auto-tune memory on Metal / CUDA:
-
-- `estimate_optimal_block_size(n_atoms)` — pick a block size for the batched
-  SASA kernel on Apple Metal.
-- `estimate_max_atoms(backend, safety_factor=0.8, sphere_points=100)` —
-  predict the device ceiling (CUDA uses `nvidia-smi`; Metal is hard-coded).
-
-### 3.3b tinygrad pipeline — `tinygrad.py`
-
-```python
 predict_binding_affinity_tinygrad(
     struct_path, selection="A,B",
     distance_cutoff=5.5, acc_threshold=0.05,
@@ -155,16 +185,10 @@ predict_binding_affinity_tinygrad(
 ) -> ProdigyResults
 ```
 
-- Imports `tinygrad` unconditionally — it's a core dependency of the package.
-- Device selection: `Device.DEFAULT`, with `TINYGRAD_DEVICE=CPU|METAL|CUDA`
-  environment override. `METAL` / `CUDA` / `GPU` devices route through
-  `calculate_sasa_batch_tinygrad`; any other device (including `CPU` /
-  `CLANG`) falls back to the full `calculate_sasa_tinygrad` kernel.
-- `estimate_optimal_block_size(n_atoms)` picks a block size targeting ~1 GB
-  of float32 scratch per block, clamped to `[32, min(n_atoms, 1024)]`.
-- Each phase (`load_complex`, `contacts`, `sasa_batch`/`sasa_full`, `nis`,
-  `score`) is wrapped in `log_duration` so enabling debug logging prints a
-  start / done-in-X.XXXs line per phase.
+Each constructs the matching adapter (`JAXAdapter` / `TinygradAdapter`)
+and delegates to `_run_pipeline`. tinygrad is a core dependency; its
+device selection is `Device.DEFAULT`, overridable via
+`TINYGRAD_DEVICE=CPU|METAL|CUDA`.
 
 ### 3.4 SASA kernels — `sasa.py`
 
@@ -178,20 +202,23 @@ predict_binding_affinity_tinygrad(
 
 ### 3.5 Contact analysis — `contacts.py`
 
-- `calculate_residue_contacts(target_pos, binder_pos, target_mask, binder_mask, distance_cutoff=5.5)` — pairwise residue contact mask (JAX).
-- `analyze_contacts(contacts, target_seq, binder_seq, class_matrix)` — projects residues onto (Aliphatic, Charged, Polar) and returns the 6-tuple `[AA, CC, PP, AC, AP, CP]`.
-- `calculate_residue_contacts_tinygrad`, `analyze_contacts_tinygrad` — tinygrad equivalents (broadcast max/any replacements for the JAX reductions).
+- `calculate_residue_contacts(target_pos, binder_pos, target_mask, binder_mask, distance_cutoff=5.5)` — pairwise residue contact mask; 5-D diff variant (JAX / numpy).
+- `calculate_residue_contacts_tinygrad(…)` — matmul-reshape variant that sidesteps Metal's unified-memory pressure on the ``[N_t, N_b, 37, 37, 3]`` intermediate.
+- `analyze_contacts(contacts, target_seq, binder_seq, class_matrix)` — backend-agnostic broadcast outer product, returns the 6-tuple `[AA, CC, PP, AC, AP, CP]`.
 
 ### 3.6 Scoring — `scoring.py`
 
-PRODIGY IC-NIS constants live in `NIS_CONSTANTS`. Key functions:
+PRODIGY IC-NIS coefficients live in the `NISCoefficients` frozen dataclass
+(singleton: `NIS_COEFFICIENTS`). Backend-agnostic primitives operate on
+duck-typed tensor methods (`@`, `.sum`, `.reshape`, `.clip`) so the same
+body runs on numpy, jax, and tinygrad:
 
-- `get_atom_radii(seq_one_hot, radii_matrix, atom_mask)` — pre-masks padded atom slots to zero.
+- `get_atom_radii(seq_one_hot, radii_matrix, atom_mask=None)` — optional mask for atom37 padding.
 - `calculate_relative_sasa(complex_sasa, seq_probs, relative_sasa_array, atoms_per_residue)`
 - `calculate_nis_percentages(sasa_values, seq_probs, character_matrix, threshold=0.05)`
 - `score_ic_nis(ic_cc, ic_ca, ic_pp, ic_pa, p_nis_a, p_nis_c, coeffs, intercept)` — returns ΔG in kcal/mol.
 - `dg_to_kd(dg, temperature=25.0)` — dissociation constant in M.
-- `get_atom_radii_tinygrad`, `calculate_relative_sasa_tinygrad`, `calculate_nis_percentages_tinygrad`, `score_ic_nis_tinygrad`, `dg_to_kd_tinygrad`, `coefficient_tensors_tinygrad` — tinygrad equivalents operating on `Tensor`s.
+- `coefficient_tensors_tinygrad(coefficients=NIS_COEFFICIENTS)` — coefficient vector + intercept as tinygrad `Tensor`s (used by `TinygradAdapter`).
 
 ### 3.7 Results — `results.py`
 
@@ -199,23 +226,19 @@ PRODIGY IC-NIS constants live in `NIS_CONSTANTS`. Key functions:
 |--------|---------|
 | `ContactAnalysis(values)` | Wrap 6-tuple of contact counts; `.to_dict()` adds totals and grouped counts (`IC`, `chargedC`, `polarC`, `aliphaticC`). |
 | `ProdigyResults` | Dataclass with ΔG, Kd, NIS percentages, contacts, and a structured `sasa_data` array. `to_dict()` / `save_results(output_dir)` / `__str__` for reports. |
-| `build_sasa_records(...)` | Build the structured `sasa_data` array from JAX outputs. |
-| `NumpyEncoder` | JSON encoder tolerant of numpy scalars/arrays. |
+| `build_sasa_records(complex_sasa, relative_sasa, target, binder, chain_labels)` | Build the structured `sasa_data` array; materializes jax/tinygrad inputs via `to_numpy`. |
 
-### 3.8 Resources — `resources.py`
+### 3.8 Utilities — `utils/`
 
-- `data_path(filename)` — context manager yielding a concrete path to a packaged data file.
-- `read_text_resource(filename)` — read a packaged file as text.
-- `collect_structure_files(path)` — return a sorted list of supported structure files from a file or directory (accepts `.pdb`, `.ent`, `.cif`, `.mmcif`).
-- `format_duration(seconds)` — short human-readable duration.
-
-### 3.9 Utilities — `utils/`
-
+- `_array` — `Array` TypeAlias (numpy | jax | tinygrad), `NumpyEncoder`, `to_numpy`, `concat` / `stack_scalars` / `exp` dispatch shims.
+- `atom14` — `compact_atom37_to_atom14`, `expand_atom14_to_atom37`, `compact_complex_atom14`; all accept `xp=np|jnp` for differentiable paths.
+- `resources` — `data_path`, `read_text_resource`, `collect_structure_files`, `format_duration`.
+- `structure` — `Protein` dataclass, `load_complex`, `load_structure`, sanitizers.
 - `residue_constants` — AlphaFold-derived lookups (`restypes`, `restype_1to3`, `atom_types`, `atom_type_num`, `STANDARD_ATOM_MASK`, chi definitions, rigid groups, …).
 - `ResidueClassification(kind="protorp" | "ic")` — character matrix, cached indices, reference relative SASA array.
-- `ResidueLibrary` — parses `data/vdw.radii`, exposes `get_radius`, `is_polar`, and a `[n_restypes, n_atoms]` radii matrix. A module-level `default_library` is pre-built.
+- `ResidueLibrary` — parses `data/vdw.radii`, exposes `get_radius`, `is_polar`, `[n_restypes, 37]` radii matrix, and `[n_restypes, 14]` atom14 variant. Module-level `default_library` is pre-built.
 
-### 3.10 Logging helpers — `logging_utils.py`
+### 3.9 Logging helpers — `utils/logging_utils.py`
 
 - `setup_logging(level="INFO", *, propagate=True)` — attach a `StreamHandler`
   to the package logger (`protein_affinity_gpu`) with an
@@ -225,9 +248,10 @@ PRODIGY IC-NIS constants live in `NIS_CONSTANTS`. Key functions:
   `get_logger(__name__)` inside a submodule.
 - `log_duration(logger, label, *, level=logging.DEBUG, extra=None)` — context
   manager that emits `"<label>: start"` and `"<label>: done in X.XXXs"` at
-  the given level. Used to tag every phase of the tinygrad pipeline
-  (`tinygrad.load_complex`, `tinygrad.contacts`, `tinygrad.sasa_batch`,
-  `tinygrad.nis`, `tinygrad.score`).
+  the given level. Wraps every phase of the unified pipeline
+  (`<device>.load_complex`, `<device>.contacts`, `<device>.sasa`,
+  `<device>.nis`, `<device>.score`) where `<device>` is the adapter's
+  resolved device name (e.g. `METAL`, `CUDA`, `CPU`).
 
 ---
 
@@ -277,7 +301,7 @@ protein-affinity-benchmark <input_path> \
 
 ## 5. Data and scoring model
 
-### 5.1 IC-NIS coefficients (`scoring.NIS_CONSTANTS`)
+### 5.1 IC-NIS coefficients (`scoring.NIS_COEFFICIENTS`)
 
 | Feature | Coefficient |
 |---------|-------------|
@@ -368,24 +392,19 @@ runs `python3 -m build` (sdist + wheel).
 ```python
 from pathlib import Path
 
-from protein_affinity_gpu import (
-    load_complex,
-    predict_binding_affinity,
-    predict_binding_affinity_jax,
-    predict_binding_affinity_tinygrad,
-)
-from protein_affinity_gpu.logging_utils import setup_logging
+from protein_affinity_gpu import load_complex, predict
+from protein_affinity_gpu.utils.logging_utils import setup_logging
 
-setup_logging("DEBUG")  # per-phase timings from the JAX / tinygrad pipelines
+setup_logging("DEBUG")  # per-phase timings from the unified pipeline
 
 structure = Path("benchmarks/fixtures/1A2K.pdb")
 
 target, binder = load_complex(structure, selection="A,B")
 print(target.atom_positions.shape, binder.atom_positions.shape)
 
-cpu = predict_binding_affinity(structure, selection="A,B")
-jax_result = predict_binding_affinity_jax(structure, selection="A,B")
-tg_result = predict_binding_affinity_tinygrad(structure, selection="A,B")
+cpu = predict(structure, backend="cpu", selection="A,B")
+jax_result = predict(structure, backend="jax", selection="A,B")
+tg_result = predict(structure, backend="tinygrad", selection="A,B")
 
 print(cpu)
 print(f"ΔΔG (CPU vs JAX)      = {cpu.binding_affinity - jax_result.binding_affinity:+.3f}")

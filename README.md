@@ -70,6 +70,7 @@ from pathlib import Path
 
 from protein_affinity_gpu import (
     load_complex,
+    predict,
     predict_binding_affinity,
     predict_binding_affinity_jax,
     predict_binding_affinity_tinygrad,
@@ -78,9 +79,13 @@ from protein_affinity_gpu import (
 structure = Path("benchmarks/fixtures/1A2K.pdb")
 target, binder = load_complex(structure, selection="A,B")
 
+# Backend-specific entry points:
 cpu_result = predict_binding_affinity(structure, selection="A,B")
 jax_result = predict_binding_affinity_jax(structure, selection="A,B")
 tg_result = predict_binding_affinity_tinygrad(structure, selection="A,B")
+
+# Or route through the unified predictor:
+result = predict(structure, backend="jax", selection="A,B")
 ```
 
 ## Result Schema
@@ -125,18 +130,21 @@ Save directly to disk with `results.save_results(output_dir)`.
 | JAX | `predict_binding_affinity_jax` | `jax`, `jaxlib` | `jax.default_backend()` |
 | tinygrad | `predict_binding_affinity_tinygrad` | `tinygrad` | `Device.DEFAULT`, override via `TINYGRAD_DEVICE` |
 
-The JAX backend auto-tunes memory based on the detected device and always
-routes through `calculate_sasa_batch`, which dispatches a jitted per-block
-kernel (compiled once per call-site) to cap peak memory:
+GPU backends share a single pipeline in `protein_affinity_gpu.predict`,
+parametrized by a `BackendAdapter` (see `protein_affinity_gpu.backends`).
+Each adapter owns its device resolution, lazy constant materialization,
+SASA kernel dispatch, and block-size heuristic:
 
-- **CUDA** — `estimate_max_atoms()` reads total GPU memory via `nvidia-smi`
-  and raises `ValueError` if a complex exceeds the estimated ceiling.
-- **Apple Metal** — assumes ~20 GB of unified memory and skips the size check.
-- **CPU (JAX)** — conservative 100k-atom ceiling.
+- **JAX / CUDA** — `JAXAdapter.validate_size()` reads total GPU memory via
+  `nvidia-smi` and raises `ValueError` if a complex exceeds the estimated
+  ceiling; block size targets ~1 GB float32 scratch.
+- **JAX / Apple Metal** — assumes ~20 GB of unified memory and skips the
+  size check; block size comes from an empirical exp-decay fit.
+- **JAX / CPU** — conservative 100k-atom ceiling.
+- **tinygrad / METAL, CUDA, GPU** — batched SASA capped at `block=768`.
+- **tinygrad / CPU** — full (non-batched) SASA path.
 
-Block size comes from `estimate_optimal_block_size(n_atoms)`.
-
-Force a device with standard JAX environment variables, e.g.
+Force a JAX device with standard JAX environment variables, e.g.
 `JAX_PLATFORMS=cpu` or `JAX_PLATFORMS=cuda`.
 
 The tinygrad backend routes METAL/CUDA/GPU through `calculate_sasa_batch_tinygrad`

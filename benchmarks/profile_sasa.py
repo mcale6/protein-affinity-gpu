@@ -21,16 +21,15 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from protein_affinity_gpu.jax import (
-    estimate_max_atoms,
-    estimate_optimal_block_size,
-    predict_binding_affinity_jax,
-)
+from protein_affinity_gpu.backends._jax import JAXAdapter
+from protein_affinity_gpu.predict import predict_binding_affinity_jax
 from protein_affinity_gpu.sasa import calculate_sasa_batch, generate_sphere_points
 from protein_affinity_gpu.scoring import get_atom_radii
-from protein_affinity_gpu.structure import load_complex
 from protein_affinity_gpu.utils import residue_constants
 from protein_affinity_gpu.utils.residue_library import default_library as residue_library
+from protein_affinity_gpu.utils.structure import load_complex
+
+_JAX_ADAPTER = JAXAdapter()
 
 _RADII = jnp.array(residue_library.radii_matrix)
 
@@ -79,12 +78,12 @@ def main() -> None:
     pos, mask, radii, sp = build_inputs(args.struct, args.selection, args.sphere_points)
     n_atoms = int(pos.shape[0])
     backend = jax.default_backend().upper()
-    est_block = estimate_optimal_block_size(n_atoms, backend, args.sphere_points)
-    max_atoms = estimate_max_atoms(backend, sphere_points=args.sphere_points)
+    est_block = _JAX_ADAPTER.estimate_block_size(n_atoms, args.sphere_points)
+    max_atoms = _JAX_ADAPTER._estimate_max_atoms(sphere_points=args.sphere_points)
 
     print(f"struct={args.struct.name}  backend={backend}  atoms={n_atoms}  M={args.sphere_points}", flush=True)
-    print(f"estimate_max_atoms({backend}) = {max_atoms:,}", flush=True)
-    print(f"estimate_optimal_block_size({n_atoms}) = {est_block}  (scratch {scratch_mb(est_block, n_atoms, args.sphere_points):.0f} MB)", flush=True)
+    print(f"max_atoms({backend}) = {max_atoms:,}", flush=True)
+    print(f"estimate_block_size({n_atoms}) = {est_block}  (scratch {scratch_mb(est_block, n_atoms, args.sphere_points):.0f} MB)", flush=True)
     print(f"interaction_matrix = {n_atoms * n_atoms / 1e6:.1f} MB (bool)", flush=True)
     print(flush=True)
 

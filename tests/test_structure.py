@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from protein_affinity_gpu.structure import load_complex
+from protein_affinity_gpu.utils.structure import load_complex
 
 
 def test_load_complex_sanitizes_hydrogens_and_waters(tmp_path: Path):

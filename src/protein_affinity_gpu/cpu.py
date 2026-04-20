@@ -5,8 +5,8 @@ from typing import Optional
 
 import numpy as np
 
-from .resources import data_path
 from .results import ContactAnalysis, ProdigyResults
+from .utils.resources import data_path
 from .utils.residue_classification import ResidueClassification
 
 LOGGER = logging.getLogger(__name__)

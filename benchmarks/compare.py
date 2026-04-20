@@ -28,8 +28,8 @@ try:
         _load_tinygrad_predictor,
     )
     from protein_affinity_gpu.cpu import predict_binding_affinity  # noqa: E402
-    from protein_affinity_gpu.resources import format_duration  # noqa: E402
-    from protein_affinity_gpu.results import NumpyEncoder  # noqa: E402
+    from protein_affinity_gpu.utils.resources import format_duration  # noqa: E402
+    from protein_affinity_gpu.utils._array import NumpyEncoder  # noqa: E402
 except ModuleNotFoundError as exc:  # pragma: no cover - import-time guidance
     raise SystemExit(
         f"Missing Python dependency '{exc.name}'. "

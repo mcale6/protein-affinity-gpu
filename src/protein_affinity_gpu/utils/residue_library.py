@@ -3,7 +3,7 @@ from pathlib import Path
 from collections import defaultdict
 import numpy as np
 
-from ..resources import data_path
+from .resources import data_path
 
 class AtomInfo(NamedTuple):
     """Store atom information."""

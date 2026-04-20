@@ -4,8 +4,8 @@ import sys
 from pathlib import Path
 
 from ..cpu import predict_binding_affinity
-from ..logging_utils import setup_logging, supports_color
-from ..resources import collect_structure_files
+from ..utils.logging_utils import setup_logging, supports_color
+from ..utils.resources import collect_structure_files
 
 LOGGER = logging.getLogger(__name__)
 
