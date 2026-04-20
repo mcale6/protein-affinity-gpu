@@ -11,7 +11,7 @@ from ..contacts import calculate_residue_contacts_tinygrad
 from ..sasa import (
     calculate_sasa_batch_tinygrad,
     calculate_sasa_tinygrad,
-    generate_sphere_points_tinygrad,
+    generate_sphere_points,
 )
 from ..scoring import coefficient_tensors_tinygrad
 from ..utils._array import Array
@@ -75,7 +75,7 @@ class TinygradAdapter:
         return Tensor.cat(*tensors, dim=axis)
 
     def sphere_points(self, n: int) -> Array:
-        return generate_sphere_points_tinygrad(n)
+        return Tensor(generate_sphere_points(n))
 
     # --- Kernels ---
     def estimate_block_size(self, n_atoms: int, sphere_points: int = 100) -> int | None:

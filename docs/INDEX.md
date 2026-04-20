@@ -194,11 +194,11 @@ device selection is `Device.DEFAULT`, overridable via
 
 | Function | Notes |
 |----------|-------|
-| `generate_sphere_points(n)` | Golden-spiral sphere point distribution (JAX). |
-| `generate_sphere_points_tinygrad(n)` | Same distribution, returns a tinygrad `Tensor`. |
-| `calculate_sasa_batch(coords, vdw_radii, mask, block_size, sphere_points, probe_radius=1.4)` | Blocked Shrake–Rupley (JAX): Python dispatcher over a `@jit`'d per-block kernel using `|a−b|² = a² + b² − 2⟨a,b⟩`. Tail block reuses the last full window so the kernel compiles once. |
-| `calculate_sasa_tinygrad` | `TinyJit`-wrapped full kernel for CPU / CLANG devices. |
-| `calculate_sasa_batch_tinygrad(..., block_size=...)` | Per-block-realized dot-product kernel; each block is `.numpy()`-reduced into a buffer to keep tinygrad's graph-rewrite stack bounded. |
+| `generate_sphere_points(n)` | Golden-spiral sphere point distribution as `[n, 3]` float32 numpy. Adapters wrap with their native tensor type. |
+| `calculate_sasa_batch(coords, vdw_radii, mask, block_size, sphere_points, probe_radius=1.4)` | Blocked Shrake–Rupley (JAX): Python dispatcher over a `@jit`'d per-block kernel using `|a−b|² = a² + b² − 2⟨a,b⟩`. `[B, N]` inter-mask computed inline via `block_abs_idx` — no upfront `[N, N]` realize. Tail block uses `effective_start` so the kernel compiles once. |
+| `calculate_sasa_batch_soft(..., beta=10.0)` | Differentiable sigmoid-smoothed variant of `calculate_sasa_batch`; shares the `_dispatch_blocked_jax` loop. Approaches the hard kernel as β→∞. |
+| `calculate_sasa_tinygrad` | `TinyJit`-wrapped full kernel for CPU / CLANG devices (dot-product identity for both `[N, N]` and `[N, M, N]` passes). |
+| `calculate_sasa_batch_tinygrad(..., block_size=...)` | Per-block `TinyJit` kernel with per-`(block, N, M)` cache; returns realized leaves that the outer accumulator stitches via `cat`. Inter-mask is computed inline (no 270 MB upfront realize). |
 
 ### 3.5 Contact analysis — `contacts.py`
 

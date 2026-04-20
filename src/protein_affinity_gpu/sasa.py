@@ -1,4 +1,5 @@
 import math
+from typing import Callable, Iterator
 
 import jax
 import jax.numpy as jnp
@@ -9,40 +10,164 @@ from tinygrad import TinyJit as _TGTinyJit
 from tinygrad import dtypes as _tg_dtypes
 
 
-def generate_sphere_points(n: int) -> jnp.ndarray:
-    """Generate approximately even sphere points with a golden spiral."""
+def generate_sphere_points(n: int) -> np.ndarray:
+    """Golden-spiral sphere points as ``[n, 3]`` float32 numpy. Adapters wrap.
+
+    Midpoint Fibonacci spacing along the Z axis — matches freesasa's
+    ``sasa_sr.c::test_points()``. Endpoint spacing collapses two indices onto
+    the poles, and Y-axis ordering rotates the spiral relative to the
+    molecule versus freesasa's Z ordering; either divergence shifts per-atom
+    SASA enough to flip residues across the NIS threshold.
+    """
     if n <= 0:
-        return jnp.zeros((0, 3))
+        return np.zeros((0, 3), dtype=np.float32)
 
-    # Midpoint Fibonacci spacing along the Z axis — matches freesasa's
-    # sasa_sr.c test_points(). Endpoint spacing collapses two indices onto
-    # the poles, and Y-axis ordering rotates the spiral relative to the
-    # molecule versus freesasa's Z ordering; either divergence shifts
-    # per-atom SASA enough to flip residues across the NIS threshold.
-    indices = jnp.arange(n, dtype=jnp.float32)
+    indices = np.arange(n, dtype=np.float32)
     z = 1.0 - (2.0 * indices + 1.0) / n
-    radius = jnp.sqrt(1.0 - z * z)
-    theta = jnp.pi * (3.0 - jnp.sqrt(5.0)) * indices
-    return jnp.stack([radius * jnp.cos(theta), radius * jnp.sin(theta), z], axis=1)
+    radius = np.sqrt(1.0 - z * z)
+    theta = np.pi * (3.0 - np.sqrt(5.0)) * indices
+    return np.stack([radius * np.cos(theta), radius * np.sin(theta), z], axis=1).astype(np.float32)
 
+
+def _iter_blocks(n_atoms: int, block_size: int) -> Iterator[tuple[int, int, int]]:
+    """Yield ``(start, end, effective_start)`` so every block keeps ``block_size`` atoms.
+
+    The tail block's window is pulled back (``effective_start = n_atoms -
+    block_size``) to preserve a uniform kernel shape — compiles once, avoids
+    a second kernel for the shorter final block. Callers slice the kernel
+    output by ``start - effective_start``.
+    """
+    for start in range(0, n_atoms, block_size):
+        end = min(start + block_size, n_atoms)
+        effective_start = min(start, n_atoms - block_size)
+        yield start, end, effective_start
+
+
+def _precompute_sasa_inputs(coords, vdw_radii, mask, probe_radius):
+    """Masked coords/radii + cached norms shared by every SASA path.
+
+    Works on JAX arrays and tinygrad tensors — all tensor methods. Callers
+    that need realized tinygrad buffers ``.realize()`` the outputs themselves.
+    """
+    masked_coords = coords * mask[:, None]
+    masked_radii = vdw_radii * mask
+    radii_with_probe = (masked_radii + probe_radius) * mask
+    coords_norm2 = (masked_coords * masked_coords).sum(axis=-1)
+    radii_probe_sq = radii_with_probe * radii_with_probe
+    return masked_coords, radii_with_probe, coords_norm2, radii_probe_sq
+
+
+# --- JAX -----------------------------------------------------------------
 
 @jit
 def _sasa_block_kernel(
-    block_coords: jnp.ndarray,      # [B, 3]
-    block_radii: jnp.ndarray,       # [B]
-    block_inter: jnp.ndarray,       # [B, N]
-    all_coords: jnp.ndarray,        # [N, 3]
-    coords_norm2: jnp.ndarray,      # [N]
-    radii_probe_sq: jnp.ndarray,    # [N]
-    sphere_points: jnp.ndarray,     # [M, 3]
+    block_coords: jnp.ndarray,           # [B, 3]
+    block_radii: jnp.ndarray,            # [B]
+    block_abs_idx: jnp.ndarray,          # [B]  int32 — absolute atom index per block row
+    all_coords: jnp.ndarray,             # [N, 3]
+    coords_norm2: jnp.ndarray,           # [N]
+    all_radii_with_probe: jnp.ndarray,   # [N]
+    radii_probe_sq: jnp.ndarray,         # [N]
+    sphere_points: jnp.ndarray,          # [M, 3]
 ) -> jnp.ndarray:
-    """Per-block buried-point count via |a-b|² = |a|² + |b|² - 2⟨a,b⟩."""
-    scaled = sphere_points[None, :, :] * block_radii[:, None, None] + block_coords[:, None, :]  # [B,M,3]
-    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)  # [B, M]
-    dot = jnp.einsum("bms,ns->bmn", scaled, all_coords)  # [B, M, N]
+    """Per-block buried-point count — inline ``[B, N]`` inter-mask.
+
+    Dot-product identity ``|a−b|² = |a|² + |b|² − 2⟨a,b⟩`` for both the
+    ``[B, N]`` pair-distance pass and the ``[B, M, N]`` sphere-point pass.
+    No upfront ``[N, N]`` interaction matrix, mirroring the tinygrad kernel.
+    """
+    n_atoms = all_coords.shape[0]
+
+    block_norm2 = jnp.sum(block_coords * block_coords, axis=-1)
+    dot_bn = block_coords @ all_coords.T
+    dist2_bn = block_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_bn
+    radsum = block_radii[:, None] + all_radii_with_probe[None, :]
+    within = dist2_bn <= (radsum * radsum)
+    atom_idx = jnp.arange(n_atoms, dtype=jnp.int32)
+    not_self = atom_idx[None, :] != block_abs_idx[:, None]
+    block_inter = within & not_self  # [B, N]
+
+    scaled = sphere_points[None, :, :] * block_radii[:, None, None] + block_coords[:, None, :]
+    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)
+    dot = jnp.einsum("bms,ns->bmn", scaled, all_coords)
     dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
     is_buried = (dist2 <= radii_probe_sq[None, None, :]) & block_inter[:, None, :]
     return jnp.any(is_buried, axis=-1).sum(axis=-1)  # [B]
+
+
+@jit
+def _soft_sasa_block_kernel(
+    block_coords: jnp.ndarray,
+    block_radii: jnp.ndarray,
+    block_abs_idx: jnp.ndarray,
+    all_coords: jnp.ndarray,
+    coords_norm2: jnp.ndarray,
+    all_radii_with_probe: jnp.ndarray,
+    radii_probe_sq: jnp.ndarray,
+    sphere_points: jnp.ndarray,
+    beta: jnp.ndarray,
+) -> jnp.ndarray:
+    """Differentiable per-block accessible-point count — inline ``[B, N]`` inter.
+
+    Replaces ``buried = dist² ≤ r²`` with ``sigmoid(β·(r² − dist²))``. Uses
+    ``log(1 − sigmoid(x)) = −softplus(x)`` so the per-point accessible
+    probability is computed in log-space and stays stable as β → ∞.
+    """
+    n_atoms = all_coords.shape[0]
+
+    block_norm2 = jnp.sum(block_coords * block_coords, axis=-1)
+    dot_bn = block_coords @ all_coords.T
+    dist2_bn = block_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_bn
+    radsum = block_radii[:, None] + all_radii_with_probe[None, :]
+    within = dist2_bn <= (radsum * radsum)
+    atom_idx = jnp.arange(n_atoms, dtype=jnp.int32)
+    not_self = atom_idx[None, :] != block_abs_idx[:, None]
+    block_inter = within & not_self
+
+    scaled = sphere_points[None, :, :] * block_radii[:, None, None] + block_coords[:, None, :]
+    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)
+    dot = jnp.einsum("bms,ns->bmn", scaled, all_coords)
+    dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
+    margin = radii_probe_sq[None, None, :] - dist2
+    log_not_occluded = -jax.nn.softplus(beta * margin)
+    log_not_occluded = jnp.where(block_inter[:, None, :], log_not_occluded, 0.0)
+    log_not_buried = log_not_occluded.sum(axis=-1)
+    return jnp.exp(log_not_buried).sum(axis=-1)  # [B]
+
+
+def _dispatch_blocked_jax(
+    kernel: Callable,
+    masked_coords: jnp.ndarray,
+    radii_with_probe: jnp.ndarray,
+    coords_norm2: jnp.ndarray,
+    radii_probe_sq: jnp.ndarray,
+    sphere_points: jnp.ndarray,
+    block_size: int,
+    *extra_kernel_args,
+) -> jnp.ndarray:
+    """Iterate ``_iter_blocks`` over ``kernel``; ``extra_kernel_args`` pass-through (e.g. ``beta``)."""
+    n_atoms = masked_coords.shape[0]
+    block_size = max(1, min(int(block_size), n_atoms))
+
+    block_counts = []
+    for start, end, effective_start in _iter_blocks(n_atoms, block_size):
+        block_abs_idx = jnp.arange(
+            effective_start, effective_start + block_size, dtype=jnp.int32
+        )
+        counts = kernel(
+            masked_coords[effective_start:effective_start + block_size],
+            radii_with_probe[effective_start:effective_start + block_size],
+            block_abs_idx,
+            masked_coords,
+            coords_norm2,
+            radii_with_probe,
+            radii_probe_sq,
+            sphere_points,
+            *extra_kernel_args,
+        )
+        write_offset = start - effective_start
+        block_counts.append(counts[write_offset:write_offset + (end - start)])
+    return jnp.concatenate(block_counts)
 
 
 def calculate_sasa_batch(
@@ -55,76 +180,23 @@ def calculate_sasa_batch(
 ) -> jnp.ndarray:
     """Blocked Shrake–Rupley SASA on JAX.
 
-    Dispatches a @jit'd per-block kernel. Uniform block shape is preserved
-    across iterations (the tail block pulls its window back so it still has
-    ``block_size`` atoms) so the kernel compiles exactly once per call-site.
+    Dispatches a ``@jit``'d per-block kernel that computes its ``[B, N]``
+    inter-mask inline — no upfront ``[N, N]`` realization. Uniform block
+    shape across iterations (tail window pulled back) so the kernel compiles
+    exactly once per call-site.
     """
-    masked_coords = coords * mask[:, None]
-    masked_radii = vdw_radii * mask
-    radii_with_probe = (masked_radii + probe_radius) * mask
-
-    diff = masked_coords[:, None, :] - masked_coords[None, :, :]
-    dist2 = jnp.sum(diff ** 2, axis=-1)
-    radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2
-    interaction_matrix = (dist2 <= radsum2) & ~jnp.eye(coords.shape[0], dtype=bool)
-
-    coords_norm2 = jnp.sum(masked_coords ** 2, axis=-1)
-    radii_probe_sq = radii_with_probe ** 2
-
-    n_atoms = coords.shape[0]
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
+    buried_counts = _dispatch_blocked_jax(
+        _sasa_block_kernel,
+        masked_coords, radii_with_probe, coords_norm2, radii_probe_sq,
+        sphere_points, block_size,
+    )
     n_points = sphere_points.shape[0]
-    block_size = max(1, min(int(block_size), n_atoms))
-
-    block_counts = []
-    for start in range(0, n_atoms, block_size):
-        end = min(start + block_size, n_atoms)
-        effective_start = min(start, n_atoms - block_size)
-        counts = _sasa_block_kernel(
-            masked_coords[effective_start:effective_start + block_size],
-            radii_with_probe[effective_start:effective_start + block_size],
-            interaction_matrix[effective_start:effective_start + block_size],
-            masked_coords,
-            coords_norm2,
-            radii_probe_sq,
-            sphere_points,
-        )
-        write_offset = start - effective_start
-        block_counts.append(counts[write_offset:write_offset + (end - start)])
-
-    buried_counts = jnp.concatenate(block_counts)
     n_accessible = n_points - buried_counts
     areas = 4.0 * jnp.pi * radii_probe_sq
     return areas * (n_accessible / n_points)
-
-
-@jit
-def _soft_sasa_block_kernel(
-    block_coords: jnp.ndarray,      # [B, 3]
-    block_radii: jnp.ndarray,       # [B]
-    block_inter: jnp.ndarray,       # [B, N]
-    all_coords: jnp.ndarray,        # [N, 3]
-    coords_norm2: jnp.ndarray,      # [N]
-    radii_probe_sq: jnp.ndarray,    # [N]
-    sphere_points: jnp.ndarray,     # [M, 3]
-    beta: jnp.ndarray,              # scalar sharpness
-) -> jnp.ndarray:
-    """Differentiable per-block accessible-point count.
-
-    Replaces ``buried = dist² ≤ r²`` with ``sigmoid(β·(r² − dist²))``. Uses the
-    identity ``log(1 − sigmoid(x)) = −softplus(x)`` so the per-point accessible
-    probability is computed in log-space to stay numerically stable as β → ∞.
-    Non-interacting / self pairs contribute 0 to the log-sum via ``where``.
-    """
-    scaled = sphere_points[None, :, :] * block_radii[:, None, None] + block_coords[:, None, :]  # [B,M,3]
-    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)  # [B, M]
-    dot = jnp.einsum("bms,ns->bmn", scaled, all_coords)  # [B, M, N]
-    dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
-    margin = radii_probe_sq[None, None, :] - dist2  # >0 if occluded
-    log_not_occluded = -jax.nn.softplus(beta * margin)  # log P(point not buried by atom j)
-    log_not_occluded = jnp.where(block_inter[:, None, :], log_not_occluded, 0.0)
-    log_not_buried = log_not_occluded.sum(axis=-1)  # [B, M]
-    accessible_per_point = jnp.exp(log_not_buried)  # [B, M] in [0, 1]
-    return accessible_per_point.sum(axis=-1)  # [B]
 
 
 def calculate_sasa_batch_soft(
@@ -136,59 +208,23 @@ def calculate_sasa_batch_soft(
     probe_radius: float = 1.4,
     beta: float = 10.0,
 ) -> jnp.ndarray:
-    """Differentiable sigmoid-smoothed SASA. Approaches ``calculate_sasa_batch`` as β→∞."""
-    masked_coords = coords * mask[:, None]
-    masked_radii = vdw_radii * mask
-    radii_with_probe = (masked_radii + probe_radius) * mask
-
-    diff = masked_coords[:, None, :] - masked_coords[None, :, :]
-    dist2 = jnp.sum(diff ** 2, axis=-1)
-    radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2
-    interaction_matrix = (dist2 <= radsum2) & ~jnp.eye(coords.shape[0], dtype=bool)
-
-    coords_norm2 = jnp.sum(masked_coords ** 2, axis=-1)
-    radii_probe_sq = radii_with_probe ** 2
-
-    n_atoms = coords.shape[0]
-    n_points = sphere_points.shape[0]
-    block_size = max(1, min(int(block_size), n_atoms))
+    """Differentiable sigmoid-smoothed SASA. Approaches :func:`calculate_sasa_batch` as β→∞."""
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
     beta_array = jnp.asarray(beta, dtype=jnp.float32)
-
-    block_counts = []
-    for start in range(0, n_atoms, block_size):
-        end = min(start + block_size, n_atoms)
-        effective_start = min(start, n_atoms - block_size)
-        counts = _soft_sasa_block_kernel(
-            masked_coords[effective_start:effective_start + block_size],
-            radii_with_probe[effective_start:effective_start + block_size],
-            interaction_matrix[effective_start:effective_start + block_size],
-            masked_coords,
-            coords_norm2,
-            radii_probe_sq,
-            sphere_points,
-            beta_array,
-        )
-        write_offset = start - effective_start
-        block_counts.append(counts[write_offset:write_offset + (end - start)])
-
-    accessible_counts = jnp.concatenate(block_counts)
+    accessible_counts = _dispatch_blocked_jax(
+        _soft_sasa_block_kernel,
+        masked_coords, radii_with_probe, coords_norm2, radii_probe_sq,
+        sphere_points, block_size,
+        beta_array,
+    )
+    n_points = sphere_points.shape[0]
     areas = 4.0 * jnp.pi * radii_probe_sq
     return areas * (accessible_counts / n_points)
 
 
-# --- Tinygrad variants ---------------------------------------------------
-
-def generate_sphere_points_tinygrad(n: int):
-    """Golden-spiral sphere points as a tinygrad Tensor — computed on-device."""
-    if n <= 0:
-        return _TGTensor.zeros((0, 3))
-
-    indices = _TGTensor.arange(n, dtype=_tg_dtypes.float32)
-    z = 1.0 - (2.0 * indices + 1.0) / n
-    radius = (1.0 - z * z).sqrt()
-    theta = math.pi * (3.0 - math.sqrt(5.0)) * indices
-    return _TGTensor.stack(radius * theta.cos(), radius * theta.sin(), z, dim=1)
-
+# --- Tinygrad ------------------------------------------------------------
 
 def _calculate_sasa_tinygrad_impl(
     coords,
@@ -199,18 +235,16 @@ def _calculate_sasa_tinygrad_impl(
 ):
     """Fully vectorized Shrake–Rupley SASA — single TinyJit-fused pass.
 
-    Uses the dot-product identity ``|a−b|² = |a|² + |b|² − 2⟨a,b⟩`` so the hot
-    tensor is [N, M, N] float32 instead of [N, M, N, 3]. Cuts peak scratch by
-    3× relative to the diff form; for N beyond ~5k the batched variant is
-    still the right call, but this path is now the fast one on Metal for
-    typical binary complexes.
+    Dot-product identity ``|a−b|² = |a|² + |b|² − 2⟨a,b⟩`` for both the
+    ``[N, N]`` interaction mask and the ``[N, M, N]`` sphere-point pass —
+    mask scratch is ``[N, N]`` float32 instead of ``[N, N, 3]``.
     """
-    masked_coords = coords * mask[:, None]
-    masked_radii = vdw_radii * mask
-    radii_with_probe = (masked_radii + probe_radius) * mask
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
 
-    diff_inter = masked_coords[:, None, :] - masked_coords[None, :, :]
-    dist2_inter = (diff_inter * diff_inter).sum(axis=-1)
+    dot_nn = masked_coords @ masked_coords.transpose(-1, -2)              # [N, N]
+    dist2_inter = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn
     radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2
     not_eye = _TGTensor.eye(coords.shape[0], dtype=_tg_dtypes.bool) == 0
     interaction_matrix = (dist2_inter <= radsum2) & not_eye
@@ -219,13 +253,10 @@ def _calculate_sasa_tinygrad_impl(
         sphere_points[None, :, :] * radii_with_probe[:, None, None]
         + masked_coords[:, None, :]
     )  # [N, M, 3]
-
-    scaled_norm2 = (scaled_points * scaled_points).sum(axis=-1)      # [N, M]
-    coords_norm2 = (masked_coords * masked_coords).sum(axis=-1)      # [N]
-    dot = scaled_points @ masked_coords.transpose(-1, -2)            # [N, M, N]
+    scaled_norm2 = (scaled_points * scaled_points).sum(axis=-1)           # [N, M]
+    dot = scaled_points @ masked_coords.transpose(-1, -2)                 # [N, M, N]
     dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
 
-    radii_probe_sq = radii_with_probe * radii_with_probe
     is_buried = (dist2 <= radii_probe_sq[None, None, :]) & interaction_matrix[:, None, :]
     buried_points = is_buried.max(axis=-1).sum(axis=-1)
     n_accessible = sphere_points.shape[0] - buried_points
@@ -249,26 +280,24 @@ def _sasa_block_tinygrad_impl(
 ):
     """Per-block buried-point count — TinyJit-wrapped for kernel reuse.
 
-    Graph is bounded: 1 pair-distance matmul + 1 probe-scattered matmul + masks
-    + one reduce. Inter mask is computed inline (no 270 MB upfront realize).
-    ``block_abs_idx`` is a per-call [B] index buffer (scalars get const-folded
-    by TinyJit on first trace and wouldn't update on later calls).
+    Same shape as the JAX blocked kernel: ``[B, N]`` inter-mask computed
+    inline via dot-product identity. ``block_abs_idx`` is a per-call ``[B]``
+    buffer (scalars get const-folded by TinyJit on first trace and wouldn't
+    update on later calls).
     """
     n_atoms = all_coords.shape[0]
     n_points = sphere_points.shape[0]
 
-    # Block-vs-all pair distances via dot-product identity — [B, N].
     block_norm2 = (block_coords * block_coords).sum(axis=-1)              # [B]
     dot_bn = block_coords @ all_coords.transpose(-1, -2)                  # [B, N]
     dist2_bn = block_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_bn
 
     radsum = block_radii[:, None] + all_radii_with_probe[None, :]         # [B, N]
     within = dist2_bn <= (radsum * radsum)
-    atom_idx = _TGTensor.arange(n_atoms, dtype=_tg_dtypes.int32)          # [N]
+    atom_idx = _TGTensor.arange(n_atoms, dtype=_tg_dtypes.int32)
     not_self = atom_idx[None, :] != block_abs_idx[:, None]                # [B, N]
-    block_inter = within & not_self                                       # [B, N]
+    block_inter = within & not_self
 
-    # Probe-centered sphere points vs all atoms — [B, M, N] via matmul.
     scaled = sphere_points[None, :, :] * block_radii[:, None, None] + block_coords[:, None, :]
     scaled_norm2 = (scaled * scaled).sum(axis=-1)                         # [B, M]
     dot = scaled @ all_coords.transpose(-1, -2)                           # [B, M, N]
@@ -280,9 +309,9 @@ def _sasa_block_tinygrad_impl(
 
 
 # TinyJit captures each input tensor's shape on its first trace and errors
-# on subsequent calls whose shapes differ. For the batched SASA kernel the
-# signature (B, N, M) is fixed per structure/block-size but varies across
-# structures in a benchmark loop, so we cache one JIT per shape triple.
+# on subsequent calls whose shapes differ. We cache one JIT per (B, N, M)
+# triple so repeated calls across differently-sized structures each reuse
+# their own compiled kernel.
 _sasa_block_jit_cache: dict[tuple[int, int, int], "_TGTinyJit"] = {}
 
 
@@ -305,27 +334,23 @@ def calculate_sasa_batch_tinygrad(
 ):
     """Blocked SASA on tinygrad — TinyJit'd per-block kernel, pipelined cat.
 
-    Three moves that matter for Metal perf:
-    - The per-block body is ``_TGTinyJit``-wrapped, so the compiled kernel is
-      cached after the first block; the remaining blocks hit the cache.
-      A separate JIT is cached per (block, N, M) triple so repeated calls
-      across structures with different atom counts each get their own
-      compiled kernel instead of tripping TinyJit's shape-mismatch check.
-    - No per-block ``.realize()``. Each JIT call already returns a realized
-      buffer, so the outer accumulator builds a shallow 1-level graph over
-      those buffers — cat of leaves, safe vs ``graph_rewrite stack too big``.
-    - The 16k×16k boolean interaction matrix is gone. Each JIT'd call derives
-      its own [B, N] inter mask in-kernel, freeing ~270 MB of unified memory.
-
-    The tail block uses the ``effective_start`` trick so every JIT call sees
-    the same shape (``block_size``) — avoids triggering a second kernel
-    compile for the shorter final block.
+    - Per-block body is ``_TGTinyJit``-wrapped (cache hit after block 1); one
+      JIT per ``(block, N, M)`` shape triple so different structures don't
+      trip TinyJit's shape-mismatch check.
+    - Each JIT call returns a realized buffer, so the outer accumulator
+      builds a shallow 1-level graph over leaves — ``cat`` of leaves, safe
+      vs ``graph_rewrite stack too big``.
+    - ``[B, N]`` inter-mask computed inline (no 270 MB upfront realize).
+    - Tail block uses ``effective_start`` so every JIT call sees the same
+      shape — no second compile for the shorter final block.
     """
-    masked_coords = (coords * mask[:, None]).realize()
-    masked_radii = (vdw_radii * mask).realize()
-    radii_with_probe = ((masked_radii + probe_radius) * mask).realize()
-    coords_norm2 = (masked_coords * masked_coords).sum(axis=-1).realize()
-    radii_probe_sq = (radii_with_probe * radii_with_probe).realize()
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
+    masked_coords = masked_coords.realize()
+    radii_with_probe = radii_with_probe.realize()
+    coords_norm2 = coords_norm2.realize()
+    radii_probe_sq = radii_probe_sq.realize()
 
     n_atoms = coords.shape[0]
     n_points = sphere_points.shape[0]
@@ -333,13 +358,10 @@ def calculate_sasa_batch_tinygrad(
     sasa_block_jit = _get_sasa_block_jit(block_size, n_atoms, n_points)
 
     block_slices = []
-    for start in range(0, n_atoms, block_size):
-        end = min(start + block_size, n_atoms)
-        effective_start = min(start, n_atoms - block_size)
+    for start, end, effective_start in _iter_blocks(n_atoms, block_size):
         # ``.contiguous().realize()`` detaches the slice from the parent
-        # buffer; TinyJit rejects duplicate buffers (slice + full tensor share
-        # storage) and also rejects const inputs — both need their own
-        # materialized buffer.
+        # buffer — TinyJit rejects duplicate buffers (slice shares storage
+        # with full tensor) and also rejects const scalar inputs.
         block_coords = masked_coords[effective_start:effective_start + block_size].contiguous().realize()
         block_radii = radii_with_probe[effective_start:effective_start + block_size].contiguous().realize()
         block_abs_idx = _TGTensor(
@@ -347,13 +369,8 @@ def calculate_sasa_batch_tinygrad(
         ).realize()
 
         block_out = sasa_block_jit(
-            block_coords,
-            block_radii,
-            block_abs_idx,
-            masked_coords,
-            coords_norm2,
-            radii_with_probe,
-            radii_probe_sq,
+            block_coords, block_radii, block_abs_idx,
+            masked_coords, coords_norm2, radii_with_probe, radii_probe_sq,
             sphere_points,
         )  # realized [block_size]
         write_offset = start - effective_start

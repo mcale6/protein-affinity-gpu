@@ -70,7 +70,7 @@ class JAXAdapter:
         return jnp.concatenate(list(tensors), axis=axis)
 
     def sphere_points(self, n: int) -> Array:
-        return generate_sphere_points(n)
+        return jnp.asarray(generate_sphere_points(n))
 
     # --- Kernels ---
     def estimate_block_size(self, n_atoms: int, sphere_points: int = 100) -> int:
