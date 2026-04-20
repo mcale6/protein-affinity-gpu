@@ -125,16 +125,16 @@ Save directly to disk with `results.save_results(output_dir)`.
 | JAX | `predict_binding_affinity_jax` | `jax`, `jaxlib` | `jax.default_backend()` |
 | tinygrad | `predict_binding_affinity_tinygrad` | `tinygrad` | `Device.DEFAULT`, override via `TINYGRAD_DEVICE` |
 
-The JAX backend auto-tunes memory based on the detected device:
+The JAX backend auto-tunes memory based on the detected device and always
+routes through `calculate_sasa_batch`, which dispatches a jitted per-block
+kernel (compiled once per call-site) to cap peak memory:
 
 - **CUDA** — `estimate_max_atoms()` reads total GPU memory via `nvidia-smi`
-  and raises `ValueError` if a complex exceeds the estimated ceiling. Uses
-  the full `calculate_sasa` kernel.
-- **Apple Metal** — assumes ~20 GB of unified memory, skips the size check,
-  and routes through `calculate_sasa_batch` with a block size chosen by
-  `estimate_optimal_block_size(n_atoms)` to cap peak memory.
-- **CPU (JAX)** — falls back to `calculate_sasa` with a conservative
-  100k-atom ceiling.
+  and raises `ValueError` if a complex exceeds the estimated ceiling.
+- **Apple Metal** — assumes ~20 GB of unified memory and skips the size check.
+- **CPU (JAX)** — conservative 100k-atom ceiling.
+
+Block size comes from `estimate_optimal_block_size(n_atoms)`.
 
 Force a device with standard JAX environment variables, e.g.
 `JAX_PLATFORMS=cpu` or `JAX_PLATFORMS=cuda`.

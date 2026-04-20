@@ -13,9 +13,14 @@ NIS_CONSTANTS = {
 }
 
 
-def get_atom_radii(sequence_one_hot: jnp.ndarray, residue_radii_matrix: jnp.ndarray) -> jnp.ndarray:
-    """Project residue probabilities into atom radii."""
-    return jnp.matmul(sequence_one_hot, residue_radii_matrix).reshape(-1)
+def get_atom_radii(
+    sequence_one_hot: jnp.ndarray,
+    residue_radii_matrix: jnp.ndarray,
+    atom_mask: jnp.ndarray,
+) -> jnp.ndarray:
+    """Project residue probabilities into per-atom vdW radii, zeroed where absent."""
+    radii = jnp.matmul(sequence_one_hot, residue_radii_matrix).reshape(-1)
+    return radii * atom_mask.reshape(-1)
 
 
 def calculate_relative_sasa(

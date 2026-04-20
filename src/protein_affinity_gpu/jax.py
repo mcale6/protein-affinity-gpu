@@ -9,7 +9,7 @@ import numpy as np
 
 from .contacts import analyze_contacts, calculate_residue_contacts
 from .results import ContactAnalysis, ProdigyResults, build_sasa_records
-from .sasa import calculate_sasa, calculate_sasa_batch, generate_sphere_points
+from .sasa import calculate_sasa_batch, calculate_sasa_batch_soft, generate_sphere_points
 from .scoring import (
     NIS_CONSTANTS,
     calculate_nis_percentages,
@@ -43,14 +43,31 @@ _COEFFS = jnp.array(
 _INTERCEPT = jnp.array([NIS_CONSTANTS["intercept"]])
 
 
-def estimate_optimal_block_size(n_atoms: int) -> int:
-    """Estimate a memory-friendly block size for Metal devices."""
-    amplitude = 6.8879e02
-    decay = -2.6156e-04
-    offset = 17.4525
-    block_size = int(round(amplitude * np.exp(decay * n_atoms) + offset))
-    max_block = min(250, int(5000 / np.sqrt(max(n_atoms, 1) / 1000)))
-    return max(5, min(block_size, max_block))
+def estimate_optimal_block_size(
+    n_atoms: int,
+    backend: str = "CPU",
+    sphere_points: int = 100,
+    cpu_scratch_bytes: int = 1_000_000_000,
+) -> int:
+    """Pick a block size for the batched SASA kernel.
+
+    Metal: empirical exp-decay fit — small blocks keep per-dispatch scratch
+    under unified-memory pressure. CPU / CUDA: prefer large blocks (fewer
+    kernel launches dominate over memory pressure); target ``cpu_scratch_bytes``
+    of float32 ``[B, M, N]`` scratch.
+    """
+    backend = backend.upper()
+    if backend == "METAL":
+        amplitude = 6.8879e02
+        decay = -2.6156e-04
+        offset = 17.4525
+        block_size = int(round(amplitude * np.exp(decay * n_atoms) + offset))
+        max_block = min(250, int(5000 / np.sqrt(max(n_atoms, 1) / 1000)))
+        return max(5, min(block_size, max_block))
+
+    per_atom_bytes = sphere_points * max(n_atoms, 1) * 4
+    block_size = max(32, cpu_scratch_bytes // per_atom_bytes)
+    return int(min(block_size, n_atoms))
 
 
 def estimate_max_atoms(backend: str, safety_factor: float = 0.8, sphere_points: int = 100) -> int:
@@ -95,8 +112,16 @@ def predict_binding_affinity_jax(
     save_results: bool = False,
     output_dir: Optional[str | Path] = ".",
     quiet: bool = True,
+    soft_sasa: bool = False,
+    soft_beta: float = 10.0,
 ) -> ProdigyResults:
-    """Run the JAX affinity prediction pipeline."""
+    """Run the JAX affinity prediction pipeline.
+
+    ``soft_sasa=True`` swaps the hard Shrake–Rupley threshold for a sigmoid
+    of sharpness ``soft_beta`` — meaningful gradients w.r.t. coords / radii at
+    the cost of some accuracy (β→∞ recovers the hard kernel). Intended for
+    training / differentiable design; leave off for straight inference.
+    """
     target_chain, binder_chain = [chain.strip() for chain in selection.split(",")]
     target, binder = load_complex(struct_path, selection=selection, sanitize=True)
     backend_name = jax.default_backend().upper()
@@ -111,8 +136,8 @@ def predict_binding_affinity_jax(
     total_sequence = jnp.concatenate([target_sequence, binder_sequence], axis=0)
     complex_radii = jnp.concatenate(
         [
-            get_atom_radii(target_sequence, _RESIDUE_RADII_MATRIX),
-            get_atom_radii(binder_sequence, _RESIDUE_RADII_MATRIX),
+            get_atom_radii(target_sequence, _RESIDUE_RADII_MATRIX, target.atom_mask),
+            get_atom_radii(binder_sequence, _RESIDUE_RADII_MATRIX, binder.atom_mask),
         ]
     )
 
@@ -131,22 +156,17 @@ def predict_binding_affinity_jax(
     )
     contact_types = analyze_contacts(contacts, target_sequence, binder_sequence, _CONTACT_CLASS_MATRIX)
 
-    if backend_name == "METAL":
-        block_size = estimate_optimal_block_size(n_atoms)
-        complex_sasa = calculate_sasa_batch(
-            coords=complex_positions,
-            vdw_radii=complex_radii,
-            mask=complex_mask,
-            block_size=block_size,
-            sphere_points=sphere_points_array,
-        )
-    else:
-        complex_sasa = calculate_sasa(
-            coords=complex_positions,
-            vdw_radii=complex_radii,
-            mask=complex_mask,
-            sphere_points=sphere_points_array,
-        )
+    block_size = estimate_optimal_block_size(n_atoms, backend_name, sphere_points)
+    sasa_fn = calculate_sasa_batch_soft if soft_sasa else calculate_sasa_batch
+    sasa_kwargs = {"beta": soft_beta} if soft_sasa else {}
+    complex_sasa = sasa_fn(
+        coords=complex_positions,
+        vdw_radii=complex_radii,
+        mask=complex_mask,
+        block_size=block_size,
+        sphere_points=sphere_points_array,
+        **sasa_kwargs,
+    )
 
     relative_sasa = calculate_relative_sasa(
         complex_sasa=complex_sasa,

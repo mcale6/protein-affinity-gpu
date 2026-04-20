@@ -172,8 +172,7 @@ predict_binding_affinity_tinygrad(
 |----------|-------|
 | `generate_sphere_points(n)` | Golden-spiral sphere point distribution (JAX). |
 | `generate_sphere_points_tinygrad(n)` | Same distribution, returns a tinygrad `Tensor`. |
-| `calculate_sasa(coords, vdw_radii, mask, sphere_points, probe_radius=1.4)` | `@jit` full Shrake–Rupley (JAX). |
-| `calculate_sasa_batch(..., block_size=...)` | Memory-efficient blocked JAX variant using `|a−b|² = a² + b² − 2⟨a,b⟩`. |
+| `calculate_sasa_batch(coords, vdw_radii, mask, block_size, sphere_points, probe_radius=1.4)` | Blocked Shrake–Rupley (JAX): Python dispatcher over a `@jit`'d per-block kernel using `|a−b|² = a² + b² − 2⟨a,b⟩`. Tail block reuses the last full window so the kernel compiles once. |
 | `calculate_sasa_tinygrad` | `TinyJit`-wrapped full kernel for CPU / CLANG devices. |
 | `calculate_sasa_batch_tinygrad(..., block_size=...)` | Per-block-realized dot-product kernel; each block is `.numpy()`-reduced into a buffer to keep tinygrad's graph-rewrite stack bounded. |
 
@@ -187,7 +186,7 @@ predict_binding_affinity_tinygrad(
 
 PRODIGY IC-NIS constants live in `NIS_CONSTANTS`. Key functions:
 
-- `get_atom_radii(seq_one_hot, radii_matrix)`
+- `get_atom_radii(seq_one_hot, radii_matrix, atom_mask)` — pre-masks padded atom slots to zero.
 - `calculate_relative_sasa(complex_sasa, seq_probs, relative_sasa_array, atoms_per_residue)`
 - `calculate_nis_percentages(sasa_values, seq_probs, character_matrix, threshold=0.05)`
 - `score_ic_nis(ic_cc, ic_ca, ic_pp, ic_pa, p_nis_a, p_nis_c, coeffs, intercept)` — returns ΔG in kcal/mol.
