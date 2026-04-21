@@ -184,6 +184,8 @@ def run_benchmark(
                 predictor = _load_jax_mode_predictor("single")
             elif target == "jax-scan":
                 predictor = _load_jax_mode_predictor("scan")
+            elif target == "jax-neighbor":
+                predictor = _load_jax_mode_predictor("neighbor")
             elif target == "tinygrad":
                 predictor = _load_tinygrad_predictor("block")
             elif target == "tinygrad-single":
@@ -276,12 +278,12 @@ def build_parser() -> argparse.ArgumentParser:
     # GPU hosts keep the full sweep (cold compile on jax-single / jax-scan is
     # the whole point of benchmarking those paths).
     default_mac = ("cpu", "tinygrad", "tinygrad-single", "tinygrad-neighbor")
-    default_gpu = ("cpu", "jax", "jax-single", "jax-scan", "jax-soft",
+    default_gpu = ("cpu", "jax", "jax-single", "jax-scan", "jax-neighbor", "jax-soft",
                    "tinygrad", "tinygrad-single", "tinygrad-neighbor")
     parser.add_argument(
         "--targets",
         nargs="+",
-        choices=("cpu", "cuda", "jax", "jax-single", "jax-scan", "jax-soft",
+        choices=("cpu", "cuda", "jax", "jax-single", "jax-scan", "jax-neighbor", "jax-soft",
                  "tinygrad", "tinygrad-single", "tinygrad-neighbor"),
         default=default_mac if sys.platform == "darwin" else default_gpu,
         help="Benchmark targets to run.",
@@ -302,12 +304,13 @@ def _plot_report(report: dict, out_path: Path) -> None:
 
     markers = {
         "cpu": "x", "cuda": "o", "jax": "o", "jax-soft": "s",
-        "jax-single": "v", "jax-scan": "P",
+        "jax-single": "v", "jax-scan": "P", "jax-neighbor": "p",
         "tinygrad": "D", "tinygrad-single": "d", "tinygrad-neighbor": "p",
     }
     colors = {
         "cpu": "#2ca02c", "cuda": "#1f77b4", "jax": "#1f77b4",
         "jax-soft": "#aec7e8", "jax-single": "#9467bd", "jax-scan": "#8c564b",
+        "jax-neighbor": "#17becf",
         "tinygrad": "#ff7f0e", "tinygrad-single": "#e68a00", "tinygrad-neighbor": "#ffb366",
     }
 

@@ -236,7 +236,8 @@ def predict_binding_affinity_jax(
     quiet: bool = True,
     soft_sasa: bool = False,
     soft_beta: float = 10.0,
-    mode: Literal["block", "single", "scan"] = "block",
+    mode: Literal["block", "single", "scan", "neighbor"] = "block",
+    k_neighbors: int = 64,
 ) -> ProdigyResults:
     """Run the PRODIGY IC-NIS pipeline on JAX.
 
@@ -247,13 +248,18 @@ def predict_binding_affinity_jax(
 
     ``mode`` selects the SASA dispatch: ``"block"`` (per-block Python loop —
     bounded scratch), ``"single"`` (one fused ``@jit``, ``[N, M, N]`` scratch),
-    or ``"scan"`` (``jax.lax.scan`` over blocks, AlphaFold-style; pairs with
-    ``jax.checkpoint`` for memory-efficient backprop).
+    ``"scan"`` (``jax.lax.scan`` over blocks, AlphaFold-style; pairs with
+    ``jax.checkpoint`` for memory-efficient backprop), or ``"neighbor"``
+    (``lax.top_k`` keeps only the K nearest atoms per row — ``[N, M, K]``
+    scratch, ~80× smaller than ``"single"`` at K=64; inference-only).
     """
     from .backends._jax import JAXAdapter
 
     return _run_pipeline(
-        JAXAdapter(soft_sasa=soft_sasa, soft_beta=soft_beta, mode=mode),
+        JAXAdapter(
+            soft_sasa=soft_sasa, soft_beta=soft_beta,
+            mode=mode, k_neighbors=k_neighbors,
+        ),
         struct_path=struct_path,
         selection=selection,
         distance_cutoff=distance_cutoff,

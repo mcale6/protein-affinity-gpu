@@ -296,3 +296,106 @@ Reach for `mode="neighbor"` only when the dense modes OOM.
 Numerical parity vs `tg-block` on the Kahraman set is within 0.001 kcal/mol
 on 15/16 structures; 1MQ8 differs by 0.028 (K=64 misses one occluder for one
 atom). Bump `k_neighbors` to recover it if needed.
+
+---
+
+## 6. JAX neighbor-cutoff port (`mode="neighbor"` on `JAXAdapter`)
+
+`calculate_sasa_jax_neighbor` mirrors §5 onto XLA:
+
+```python
+@partial(jit, static_argnames=("k_neighbors",))
+def _calculate_sasa_jax_neighbor_impl(coords, vdw_radii, mask,
+                                      sphere_points, k_neighbors,
+                                      probe_radius=1.4):
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = \
+        _precompute_sasa_inputs(coords, vdw_radii, mask, probe_radius)
+
+    dot_nn = masked_coords @ masked_coords.T
+    dist2_nn = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn
+    eye = jnp.eye(coords.shape[0], dtype=jnp.float32)
+    dist2_no_self = dist2_nn + eye * 1e10
+
+    _, neighbor_idx = jax.lax.top_k(-dist2_no_self, k_neighbors)        # [N, K]
+    nb_coords = masked_coords[neighbor_idx]
+    nb_radii_sq = radii_probe_sq[neighbor_idx]
+    nb_norm2 = jnp.sum(nb_coords * nb_coords, axis=-1)
+
+    scaled = sphere_points[None, :, :] * radii_with_probe[:, None, None] \
+             + masked_coords[:, None, :]
+    sp_norm2 = jnp.sum(scaled ** 2, axis=-1)
+    dot = jnp.einsum("nms,nks->nmk", scaled, nb_coords)                  # [N, M, K]
+    dist2 = sp_norm2[:, :, None] + nb_norm2[:, None, :] - 2.0 * dot
+
+    is_buried = dist2 <= nb_radii_sq[:, None, :]
+    buried = jnp.any(is_buried, axis=-1).sum(axis=-1)
+    areas = 4.0 * jnp.pi * radii_probe_sq
+    return areas * ((sphere_points.shape[0] - buried) / sphere_points.shape[0])
+```
+
+Two JAX-specific notes:
+
+- **`static_argnames=("k_neighbors",)`** — `jax.lax.top_k` requires its `k`
+  as a Python int. Making it static lets XLA const-fold the K dimension
+  through the `gather` and the `[N, M, K]` einsum. One cache entry per `(N,
+  M, K)` tuple, matching the tinygrad path.
+- **No soft variant.** `lax.top_k` is argsort-based, so its gradient w.r.t.
+  coords is zero almost everywhere (neighbor membership is piecewise
+  constant). Users who want differentiable SASA should stay on `"scan"`
+  with `soft_sasa=True` — that path already wraps the blocked kernel in
+  `lax.scan` for `jax.checkpoint`-friendly backprop.
+
+### Numerical parity (1A2K, M=100)
+
+| pair | `max|Δ|` |
+|------|---------:|
+| `jax-dense` vs `tg-dense`     | 7.6e-6 |
+| `jax-neighbor` vs `tg-neighbor` (K=64) | 1.5e-5 |
+| `jax-dense` vs `jax-neighbor` (K=64)   | 1.25e+2 (Σ=1216.920) |
+| `tg-dense`  vs `tg-neighbor`  (K=64)   | 1.25e+2 (Σ=1216.918) |
+
+The two backends agree to fp32 roundoff; the 125 Å² per-atom gap vs dense
+is the K=64 truncation (confirmed by both implementations hitting the same
+sum to 3 decimal places).
+
+### `jax-neighbor` benchmark target
+
+Added to `benchmarks/benchmark.py` alongside `jax-single` / `jax-scan` /
+`jax-soft`; included in `default_gpu` so `protein-affinity-benchmark …`
+picks it up automatically on CUDA hosts. On macOS / Metal the `default_mac`
+tuple still skips JAX targets (JAX falls back to CPU there and adds 10× to
+every row of the sweep).
+
+---
+
+## 7. Device-memory profiling in the logs
+
+All SASA wrappers (`calculate_sasa_jax*`, `calculate_sasa_*_tinygrad*`) now
+emit a single post-realization log line alongside the pre-call scratch
+estimate:
+
+```
+jax.sasa.neighbor: N=6216 M=100 K=64 → scratch ~159.1 MB vs dense ~15455.5 MB (97× smaller)
+jax.sasa.neighbor: mem rss_mb=408 jax_in_use_mb=221 jax_peak_mb=231
+tinygrad.sasa.neighbor: mem rss_mb=1195 tg_mem_used_mb=7
+```
+
+Sources, all try/except-guarded so missing backends don't error:
+
+- **`rss_mb`** — `resource.getrusage(RUSAGE_SELF).ru_maxrss`, normalized
+  for the macOS (bytes) vs Linux (KB) ABI split. Process-wide high-water
+  mark; useful as a sanity floor across backends.
+- **`jax_in_use_mb` / `jax_peak_mb`** — `jax.devices()[0].memory_stats()`.
+  Returns `None` on CPU (silently skipped); on CUDA/ROCm/Metal reports
+  `bytes_in_use` and `peak_bytes_in_use` cumulative since process start.
+  JAX wrappers call `.block_until_ready()` before the snapshot so the peak
+  reflects the actual compute, not enqueued work.
+- **`tg_mem_used_mb`** — `tinygrad.helpers.GlobalCounters.mem_used`.
+  tinygrad frees kernel intermediates on `.realize()`, so this is
+  post-kernel and reflects persistent buffers only. The pre-call scratch
+  estimate in the compile log stays the authoritative peak signal.
+
+On a GPU host comparing `jax-single` vs `jax-neighbor` the
+`jax_peak_mb` line quantifies the ~80× scratch reduction directly; on CPU
+hosts only `rss_mb` shows, which is still enough to spot the
+`jax-single` `[N, M, N]` blowup.

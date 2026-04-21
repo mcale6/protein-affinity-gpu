@@ -163,7 +163,7 @@ device resolution, lazy constants, and kernel dispatch:
 
 | Adapter | Notable behavior |
 |---------|------------------|
-| `JAXAdapter` | `soft_sasa=True` swaps in the sigmoid SASA kernel; `validate_size` calls `nvidia-smi` on CUDA; block size uses an exp-decay fit on Metal, ~1 GB scratch target otherwise. |
+| `JAXAdapter` | `mode={"block","single","scan","neighbor"}` selects the SASA dispatch (default `"block"`). `"single"` is the fully-fused `@jit` (`[N, M, N]` scratch), `"scan"` compiles the whole blocked sweep as one `lax.scan` program (AlphaFold `layer_stack` pattern, pairs with `jax.checkpoint`), `"neighbor"` uses `jax.lax.top_k` to keep the K nearest atoms per row (`k_neighbors=64` default, `[N, M, K]` scratch, ~80× smaller than `"single"`; inference-only). `soft_sasa=True` swaps in the sigmoid SASA kernel (`"block"`/`"scan"`/`"single"` modes only). `validate_size` calls `nvidia-smi` on CUDA; block size uses an exp-decay fit on Metal, ~1 GB scratch target otherwise. |
 | `TinygradAdapter` | `mode={"block","single","neighbor"}` selects the SASA dispatch (default `"block"`). `METAL` / `CUDA` / `GPU` → batched SASA with `block=min(768, N)`; any other device (incl. `CPU` / `CLANG`) → full `calculate_sasa_tinygrad` kernel (`block_size=None`). `"neighbor"` keeps only the K nearest atoms per row (`k_neighbors=64` default) to shrink scratch from `[N, M, N]` to `[N, M, K]`. |
 
 ### 3.3b Backend entry points (in `predict.py`)
@@ -175,6 +175,8 @@ predict_binding_affinity_jax(
     temperature=25.0, sphere_points=100,
     save_results=False, output_dir=".", quiet=True,
     soft_sasa=False, soft_beta=10.0,
+    mode="block",            # "block" | "single" | "scan" | "neighbor"
+    k_neighbors=64,          # only used when mode="neighbor"
 ) -> ProdigyResults
 
 predict_binding_affinity_tinygrad(
@@ -199,9 +201,22 @@ device selection is `Device.DEFAULT`, overridable via
 | `generate_sphere_points(n)` | Golden-spiral sphere point distribution as `[n, 3]` float32 numpy. Adapters wrap with their native tensor type. |
 | `calculate_sasa_batch(coords, vdw_radii, mask, block_size, sphere_points, probe_radius=1.4)` | Blocked Shrake–Rupley (JAX): Python dispatcher over a `@jit`'d per-block kernel using `|a−b|² = a² + b² − 2⟨a,b⟩`. `[B, N]` inter-mask computed inline via `block_abs_idx` — no upfront `[N, N]` realize. Tail block uses `effective_start` so the kernel compiles once. |
 | `calculate_sasa_batch_soft(..., beta=10.0)` | Differentiable sigmoid-smoothed variant of `calculate_sasa_batch`; shares the `_dispatch_blocked_jax` loop. Approaches the hard kernel as β→∞. |
+| `calculate_sasa_jax(coords, vdw_radii, mask, sphere_points, probe_radius=1.4)` | Fully-fused single-pass `@jit` SASA — `[N, M, N]` peak scratch. Emits an `info`/`warning` log with an estimate of the scratch size so OOMs are obvious. |
+| `calculate_sasa_jax_soft(...)` | Differentiable single-pass JAX SASA (sigmoid kernel); β→∞ recovers `calculate_sasa_jax`. |
+| `calculate_sasa_batch_scan(...)` / `calculate_sasa_batch_scan_soft(...)` | Same blocked kernel as `calculate_sasa_batch`, dispatched via `jax.lax.scan` so the whole sweep compiles as one program; body is wrappable with `jax.checkpoint` for AlphaFold-style memory-efficient backprop. |
+| `calculate_sasa_jax_neighbor(..., k_neighbors=64)` | Single-pass JAX port of `calculate_sasa_tinygrad_neighbor` — `jax.lax.top_k` on `-dist²` keeps the K nearest atoms per row, buried-check scratch `[N, M, K]` instead of `[N, M, N]` (~80× smaller at K=64). `k_neighbors` is a `static_argnames` so XLA const-folds the K dimension. Inference-only (`top_k` isn't usefully differentiable). |
 | `calculate_sasa_tinygrad` | `TinyJit`-wrapped full kernel for CPU / CLANG devices (dot-product identity for both `[N, N]` and `[N, M, N]` passes). |
 | `calculate_sasa_batch_tinygrad(..., block_size=...)` | Per-block `TinyJit` kernel with per-`(block, N, M)` cache; per-block output is detached to numpy on each iteration to dodge TinyJit's persistent output-buffer aliasing (every JIT call wraps the same buffer, so retaining tensors across calls leaks the latest result into earlier ones). Inter-mask is computed inline (no 270 MB upfront realize). |
 | `calculate_sasa_tinygrad_neighbor(..., k_neighbors=64)` | Single TinyJit kernel that uses `Tensor.topk` to keep only the K nearest atoms per row, shrinking the buried-check scratch from `[N, M, N]` to `[N, M, K]` (~80× at K=64). Lossless when K covers the worst-case occlusion-neighbor count; trades scratch for `topk` compute, so on Apple Metal it is **slower** than the blocked kernel — its win is memory headroom on size-constrained devices. |
+
+Every wrapper calls `_log_device_memory(tag)` after realization (JAX paths
+also `block_until_ready()` first so the reading reflects the actual compute).
+The log line is a single `key=value` string — `rss_mb` from `resource.getrusage`
+on any platform, `jax_in_use_mb` / `jax_peak_mb` from
+`jax.devices()[0].memory_stats()` on GPU, `tg_mem_used_mb` from
+`tinygrad.helpers.GlobalCounters.mem_used`. Tags: `jax.sasa.{block,block_soft,
+single,single_soft,scan,scan_soft,neighbor}`, `tinygrad.sasa.{block,single,
+neighbor}`. Enable via `setup_logging("INFO")` or `--verbose` in the CLIs.
 
 ### 3.5 Contact analysis — `contacts.py`
 

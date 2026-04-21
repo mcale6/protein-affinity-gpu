@@ -16,6 +16,7 @@ from ..sasa import (
     calculate_sasa_batch_scan_soft,
     calculate_sasa_batch_soft,
     calculate_sasa_jax,
+    calculate_sasa_jax_neighbor,
     calculate_sasa_jax_soft,
     generate_sphere_points,
 )
@@ -24,7 +25,7 @@ from ..utils._array import Array
 from ..utils.residue_classification import ResidueClassification
 from ..utils.residue_library import default_library as residue_library
 
-SasaMode = Literal["block", "single", "scan"]
+SasaMode = Literal["block", "single", "scan", "neighbor"]
 
 
 class JAXAdapter:
@@ -40,6 +41,10 @@ class JAXAdapter:
       ``jax.lax.scan`` so the whole sweep compiles as one program. Matches
       AlphaFold's layer_stack pattern; wrap the scan body with
       ``jax.checkpoint`` for memory-efficient backprop.
+    - ``"neighbor"`` — single fused ``@jit`` that uses ``lax.top_k`` to keep
+      only the K nearest atoms per row; ``[N, M, K]`` scratch (~80× smaller
+      than ``"single"`` at K=64). Inference-only; ``soft_sasa`` is ignored
+      in this mode because ``top_k`` is not usefully differentiable.
     """
 
     def __init__(
@@ -48,10 +53,12 @@ class JAXAdapter:
         soft_sasa: bool = False,
         soft_beta: float = 10.0,
         mode: SasaMode = "block",
+        k_neighbors: int = 64,
     ) -> None:
         self._soft_sasa = soft_sasa
         self._soft_beta = soft_beta
         self._mode = mode
+        self._k_neighbors = k_neighbors
 
     @property
     def name(self) -> str:
@@ -165,6 +172,8 @@ class JAXAdapter:
         block_size: int | None,
     ) -> Array:
         common = dict(coords=coords, vdw_radii=vdw_radii, mask=mask, sphere_points=sphere_points)
+        if self._mode == "neighbor":
+            return calculate_sasa_jax_neighbor(**common, k_neighbors=self._k_neighbors)
         if self._mode == "single":
             if self._soft_sasa:
                 return calculate_sasa_jax_soft(**common, beta=self._soft_beta)
