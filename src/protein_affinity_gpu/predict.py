@@ -276,12 +276,21 @@ def predict_binding_affinity_tinygrad(
     save_results: bool = False,
     output_dir: Optional[str | Path] = ".",
     quiet: bool = True,
+    mode: Literal["block", "single", "neighbor"] = "block",
+    k_neighbors: int = 64,
 ) -> ProdigyResults:
-    """Run the PRODIGY IC-NIS pipeline on tinygrad."""
+    """Run the PRODIGY IC-NIS pipeline on tinygrad.
+
+    ``mode`` selects the SASA dispatch: ``"block"`` (default) uses the
+    blocked TinyJit kernel, ``"single"`` is the fully-fused kernel,
+    ``"neighbor"`` keeps only the K nearest atoms per row via
+    ``Tensor.topk`` — ~80× scratch reduction at K=64, lossless when
+    K covers the worst-case occlusion neighbor count.
+    """
     from .backends._tinygrad import TinygradAdapter
 
     return _run_pipeline(
-        TinygradAdapter(),
+        TinygradAdapter(mode=mode, k_neighbors=k_neighbors),
         struct_path=struct_path,
         selection=selection,
         distance_cutoff=distance_cutoff,

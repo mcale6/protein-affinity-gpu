@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 from functools import cached_property
+from typing import Literal
 
 import numpy as np
 from tinygrad import Device, Tensor
@@ -11,6 +12,7 @@ from ..contacts import calculate_residue_contacts_tinygrad
 from ..sasa import (
     calculate_sasa_batch_tinygrad,
     calculate_sasa_tinygrad,
+    calculate_sasa_tinygrad_neighbor,
     generate_sphere_points,
 )
 from ..scoring import coefficient_tensors_tinygrad
@@ -18,11 +20,33 @@ from ..utils._array import Array
 from ..utils.residue_classification import ResidueClassification
 from ..utils.residue_library import default_library as residue_library
 
+TinygradSasaMode = Literal["block", "single", "neighbor"]
 _ACCELERATOR_DEVICES = {"METAL", "CUDA", "GPU"}
 
 
 class TinygradAdapter:
-    """Backend adapter for :mod:`tinygrad`."""
+    """Backend adapter for :mod:`tinygrad`.
+
+    ``mode`` selects the SASA dispatch:
+
+    - ``"block"`` (default on accelerators) — blocked kernel with per-shape
+      ``TinyJit`` cache, bounded scratch.
+    - ``"single"`` — fully-fused single TinyJit, ``[N, M, N]`` scratch;
+      device-memory limited.
+    - ``"neighbor"`` — single TinyJit using ``Tensor.topk`` to keep only
+      the K nearest atoms per row, shrinking the buried-check scratch
+      from ``[N, M, N]`` to ``[N, M, K]`` (~80× at K=64). Lossless when
+      K covers the worst-case occlusion neighbor count.
+    """
+
+    def __init__(
+        self,
+        *,
+        mode: TinygradSasaMode = "block",
+        k_neighbors: int = 64,
+    ) -> None:
+        self._mode = mode
+        self._k_neighbors = k_neighbors
 
     @property
     def name(self) -> str:
@@ -114,17 +138,9 @@ class TinygradAdapter:
         sphere_points: Array,
         block_size: int | None,
     ) -> Array:
-        if block_size is None:
-            return calculate_sasa_tinygrad(
-                coords=coords,
-                vdw_radii=vdw_radii,
-                mask=mask,
-                sphere_points=sphere_points,
-            )
-        return calculate_sasa_batch_tinygrad(
-            coords=coords,
-            vdw_radii=vdw_radii,
-            mask=mask,
-            sphere_points=sphere_points,
-            block_size=block_size,
-        )
+        common = dict(coords=coords, vdw_radii=vdw_radii, mask=mask, sphere_points=sphere_points)
+        if self._mode == "neighbor":
+            return calculate_sasa_tinygrad_neighbor(**common, k_neighbors=self._k_neighbors)
+        if self._mode == "single" or block_size is None:
+            return calculate_sasa_tinygrad(**common)
+        return calculate_sasa_batch_tinygrad(**common, block_size=block_size)

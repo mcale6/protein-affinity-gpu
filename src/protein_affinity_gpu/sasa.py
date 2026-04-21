@@ -528,6 +528,109 @@ def calculate_sasa_tinygrad(coords, vdw_radii, mask, sphere_points, probe_radius
     return jit(coords, vdw_radii, mask, sphere_points, probe_radius)
 
 
+# --- Tinygrad neighbor-cutoff SASA --------------------------------------
+#
+# Same algorithm as ``_calculate_sasa_tinygrad_impl`` but with the inner
+# ``[N, M, N]`` buried-check shrunk to ``[N, M, K]`` by selecting the K
+# nearest neighbors of each atom. The dense ``[N, N]`` interaction mask
+# is implicitly the cutoff in the original kernel; we just *use* it to
+# skip work instead of broadcasting it. ``Tensor.topk`` and fancy
+# indexing both fuse inside ``TinyJit`` so the topk + gather + buried
+# pass compile as one program — no intermediate ``[N, N]`` materialized
+# beyond the ``[N, N]`` distance matrix needed for topk itself.
+#
+# Memory: ``[N, M, K]`` scratch instead of ``[N, M, N]`` — at N=5000
+# M=100 K=64 that's 130 MB instead of 10 GB, ~80× reduction.
+#
+# Correctness vs. the dense kernel: lossless when K covers the worst-
+# case neighbor count within the physical occlusion radius
+# ``(r_i + r_j + probe)``. Protein interiors max out around 40-60
+# atoms within that radius for atom14 spheres; K=64 is a safe default.
+# The buried check itself is the physical cutoff (``dist² ≤ r²``),
+# so any neighbor selected by topk that's beyond that radius simply
+# contributes zero — no false occlusion.
+
+def _calculate_sasa_tinygrad_neighbor_impl(
+    coords,                 # [N, 3]
+    vdw_radii,              # [N]
+    mask,                   # [N]
+    sphere_points,          # [M, 3]
+    k_neighbors: int = 64,
+    probe_radius: float = 1.4,
+):
+    """Single-pass tinygrad SASA on K nearest neighbors. ``K`` is const-folded."""
+    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
+        coords, vdw_radii, mask, probe_radius
+    )
+    n_atoms = coords.shape[0]
+    n_points = sphere_points.shape[0]
+
+    # Pairwise atom distances; drop self by adding a large constant on the
+    # diagonal so topk picks K *other* atoms.
+    dot_nn = masked_coords @ masked_coords.transpose(-1, -2)               # [N, N]
+    dist2_nn = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn
+    eye = _TGTensor.eye(n_atoms, dtype=_tg_dtypes.float32)
+    dist2_no_self = dist2_nn + eye * 1e10
+
+    # K nearest neighbor indices per atom. ``-dist2`` because ``topk`` returns
+    # *largest*; we want smallest distance.
+    _, neighbor_idx = (-dist2_no_self).topk(k_neighbors, dim=-1)            # [N, K]
+
+    nb_coords = masked_coords[neighbor_idx]                                 # [N, K, 3]
+    nb_radii_sq = radii_probe_sq[neighbor_idx]                              # [N, K]
+    nb_norm2 = (nb_coords * nb_coords).sum(axis=-1)                         # [N, K]
+
+    # Sphere points around each atom centre.
+    scaled_points = (
+        sphere_points[None, :, :] * radii_with_probe[:, None, None]
+        + masked_coords[:, None, :]
+    )                                                                       # [N, M, 3]
+    sp_norm2 = (scaled_points * scaled_points).sum(axis=-1)                 # [N, M]
+
+    # ``[N, M, 3] @ [N, 3, K] → [N, M, K]`` — the only big tensor here.
+    dot = scaled_points @ nb_coords.transpose(-1, -2)                       # [N, M, K]
+    dist2 = sp_norm2[:, :, None] + nb_norm2[:, None, :] - 2.0 * dot         # [N, M, K]
+
+    # Buried check vs neighbor radii. No explicit interaction mask: any
+    # neighbor outside (r_i + r_j + probe) gives ``dist² > r²`` and falls
+    # out naturally.
+    is_buried = dist2 <= nb_radii_sq[:, None, :]                            # [N, M, K]
+    buried_points = is_buried.max(axis=-1).sum(axis=-1)                     # [N]
+    n_accessible = n_points - buried_points
+
+    areas = 4.0 * math.pi * radii_probe_sq
+    return (areas * (n_accessible / n_points)).realize()
+
+
+_sasa_tinygrad_neighbor_jit_cache: dict[tuple[int, int, int], "_TGTinyJit"] = {}
+
+
+def calculate_sasa_tinygrad_neighbor(
+    coords, vdw_radii, mask, sphere_points,
+    k_neighbors: int = 64,
+    probe_radius: float = 1.4,
+):
+    """Neighbor-cutoff tinygrad SASA — JIT cached per ``(N, M, K)``."""
+    n_atoms = int(coords.shape[0])
+    k_neighbors = int(min(k_neighbors, max(1, n_atoms - 1)))
+    key = (n_atoms, int(sphere_points.shape[0]), k_neighbors)
+    jit = _sasa_tinygrad_neighbor_jit_cache.get(key)
+    if jit is None:
+        scratch_mb = key[0] * key[1] * key[2] * 4 / 1e6
+        dense_mb = key[0] * key[1] * key[0] * 4 / 1e6
+        LOGGER.info(
+            "tinygrad.sasa.neighbor: compiling new TinyJit for N=%d M=%d K=%d "
+            "(scratch ~%.1f MB vs dense ~%.1f MB → %.0f× smaller, cache size %d → %d)",
+            key[0], key[1], key[2], scratch_mb, dense_mb, dense_mb / max(scratch_mb, 0.01),
+            len(_sasa_tinygrad_neighbor_jit_cache), len(_sasa_tinygrad_neighbor_jit_cache) + 1,
+        )
+        jit = _TGTinyJit(_calculate_sasa_tinygrad_neighbor_impl)
+        _sasa_tinygrad_neighbor_jit_cache[key] = jit
+    else:
+        LOGGER.debug("tinygrad.sasa.neighbor: TinyJit cache hit N=%d M=%d K=%d", *key)
+    return jit(coords, vdw_radii, mask, sphere_points, k_neighbors, probe_radius)
+
+
 def _sasa_block_tinygrad_impl(
     block_coords,          # [B, 3]    realized leaf
     block_radii,           # [B]       realized leaf
@@ -604,17 +707,22 @@ def calculate_sasa_batch_tinygrad(
     block_size: int,
     probe_radius: float = 1.4,
 ):
-    """Blocked SASA on tinygrad — TinyJit'd per-block kernel, pipelined cat.
+    """Blocked SASA on tinygrad — TinyJit'd per-block kernel, numpy accumulate.
 
     - Per-block body is ``_TGTinyJit``-wrapped (cache hit after block 1); one
       JIT per ``(block, N, M)`` shape triple so different structures don't
       trip TinyJit's shape-mismatch check.
-    - Each JIT call returns a realized buffer, so the outer accumulator
-      builds a shallow 1-level graph over leaves — ``cat`` of leaves, safe
-      vs ``graph_rewrite stack too big``.
     - ``[B, N]`` inter-mask computed inline (no 270 MB upfront realize).
     - Tail block uses ``effective_start`` so every JIT call sees the same
       shape — no second compile for the shorter final block.
+    - Each block's output is copied out to a numpy slab via ``.numpy()``
+      before the next JIT call. TinyJit reuses the output buffer across
+      calls — keeping raw Tensor handles from an earlier call means the
+      next call's write overwrites those earlier "slices" in place,
+      silently zeroing large chunks of SASA when there are 3+ blocks.
+      (Lazy ``.contiguous().realize()``, ``+0``, or ``Tensor.cat`` on the
+      handles don't copy, so the numpy detach is the only path that's
+      correct here.)
     """
     masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
         coords, vdw_radii, mask, probe_radius
@@ -629,7 +737,7 @@ def calculate_sasa_batch_tinygrad(
     block_size = max(1, min(int(block_size), n_atoms))
     sasa_block_jit = _get_sasa_block_jit(block_size, n_atoms, n_points)
 
-    block_slices = []
+    n_accessible_np = np.empty(n_atoms, dtype=np.float32)
     for start, end, effective_start in _iter_blocks(n_atoms, block_size):
         # ``.contiguous().realize()`` detaches the slice from the parent
         # buffer — TinyJit rejects duplicate buffers (slice shares storage
@@ -644,10 +752,10 @@ def calculate_sasa_batch_tinygrad(
             block_coords, block_radii, block_abs_idx,
             masked_coords, coords_norm2, radii_with_probe, radii_probe_sq,
             sphere_points,
-        )  # realized [block_size]
+        )
         write_offset = start - effective_start
-        block_slices.append(block_out[write_offset:write_offset + (end - start)])
+        n_accessible_np[start:end] = block_out.numpy()[write_offset:write_offset + (end - start)]
 
-    n_accessible = block_slices[0] if len(block_slices) == 1 else _TGTensor.cat(*block_slices, dim=0)
+    n_accessible = _TGTensor(n_accessible_np)
     areas = (4.0 * math.pi) * radii_probe_sq
     return (areas * n_accessible / n_points).realize()

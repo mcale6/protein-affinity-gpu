@@ -54,10 +54,13 @@ def _load_jax_mode_predictor(mode: str):
     return predictor
 
 
-def _load_tinygrad_predictor():
+def _load_tinygrad_predictor(mode: str = "block"):
     from protein_affinity_gpu.predict import predict_binding_affinity_tinygrad
 
-    return predict_binding_affinity_tinygrad
+    def predictor(**kwargs):
+        return predict_binding_affinity_tinygrad(mode=mode, **kwargs)
+
+    return predictor
 
 
 def _count_atoms(structure_path: Path, selection: str) -> int:
@@ -182,7 +185,11 @@ def run_benchmark(
             elif target == "jax-scan":
                 predictor = _load_jax_mode_predictor("scan")
             elif target == "tinygrad":
-                predictor = _load_tinygrad_predictor()
+                predictor = _load_tinygrad_predictor("block")
+            elif target == "tinygrad-single":
+                predictor = _load_tinygrad_predictor("single")
+            elif target == "tinygrad-neighbor":
+                predictor = _load_tinygrad_predictor("neighbor")
             else:
                 predictor = predict_binding_affinity
 
@@ -264,11 +271,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--distance-cutoff", type=float, default=5.5, help="Interface distance cutoff in angstrom.")
     parser.add_argument("--acc-threshold", type=float, default=0.05, help="Relative SASA threshold.")
     parser.add_argument("--sphere-points", type=int, default=100, help="Number of sphere points for SASA.")
+    # On Mac (tinygrad Metal, no CUDA), skip JAX CPU targets by default — they
+    # take an order of magnitude longer and rarely tell you anything interesting.
+    # GPU hosts keep the full sweep (cold compile on jax-single / jax-scan is
+    # the whole point of benchmarking those paths).
+    default_mac = ("cpu", "tinygrad", "tinygrad-single", "tinygrad-neighbor")
+    default_gpu = ("cpu", "jax", "jax-single", "jax-scan", "jax-soft",
+                   "tinygrad", "tinygrad-single", "tinygrad-neighbor")
     parser.add_argument(
         "--targets",
         nargs="+",
-        choices=("cpu", "cuda", "jax", "jax-single", "jax-scan", "jax-soft", "tinygrad"),
-        default=("cpu", "jax", "jax-single", "jax-scan", "jax-soft", "tinygrad"),
+        choices=("cpu", "cuda", "jax", "jax-single", "jax-scan", "jax-soft",
+                 "tinygrad", "tinygrad-single", "tinygrad-neighbor"),
+        default=default_mac if sys.platform == "darwin" else default_gpu,
         help="Benchmark targets to run.",
     )
     parser.add_argument(
@@ -288,12 +303,12 @@ def _plot_report(report: dict, out_path: Path) -> None:
     markers = {
         "cpu": "x", "cuda": "o", "jax": "o", "jax-soft": "s",
         "jax-single": "v", "jax-scan": "P",
-        "tinygrad": "D",
+        "tinygrad": "D", "tinygrad-single": "d", "tinygrad-neighbor": "p",
     }
     colors = {
         "cpu": "#2ca02c", "cuda": "#1f77b4", "jax": "#1f77b4",
         "jax-soft": "#aec7e8", "jax-single": "#9467bd", "jax-scan": "#8c564b",
-        "tinygrad": "#ff7f0e",
+        "tinygrad": "#ff7f0e", "tinygrad-single": "#e68a00", "tinygrad-neighbor": "#ffb366",
     }
 
     by_target: dict[str, list[tuple[int, float]]] = {}
