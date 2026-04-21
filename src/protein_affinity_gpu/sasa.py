@@ -9,6 +9,10 @@ from tinygrad import Tensor as _TGTensor
 from tinygrad import TinyJit as _TGTinyJit
 from tinygrad import dtypes as _tg_dtypes
 
+from .utils.logging_utils import get_logger
+
+LOGGER = get_logger(__name__)
+
 
 def generate_sphere_points(n: int) -> np.ndarray:
     """Golden-spiral sphere points as ``[n, 3]`` float32 numpy. Adapters wrap.
@@ -307,6 +311,16 @@ def _calculate_sasa_jax_soft_impl(
     return areas * (n_accessible / n_points)
 
 
+def _log_single_pass_scratch(n_atoms: int, n_points: int, soft: bool) -> None:
+    """Warn when fused [N, M, N] scratch gets large — leading cause of OOM."""
+    scratch_gb = n_atoms * n_points * n_atoms * 4 / 1e9
+    level = "warning" if scratch_gb > 4.0 else "info"
+    getattr(LOGGER, level)(
+        "jax.sasa.single%s: N=%d M=%d → peak [N,M,N] scratch ~%.2f GB",
+        "_soft" if soft else "", n_atoms, n_points, scratch_gb,
+    )
+
+
 def calculate_sasa_jax(
     coords: jnp.ndarray,
     vdw_radii: jnp.ndarray,
@@ -315,6 +329,7 @@ def calculate_sasa_jax(
     probe_radius: float = 1.4,
 ) -> jnp.ndarray:
     """Single-pass JAX SASA — fastest when ``[N, M, N]`` scratch fits on device."""
+    _log_single_pass_scratch(coords.shape[0], sphere_points.shape[0], soft=False)
     return _calculate_sasa_jax_impl(coords, vdw_radii, mask, sphere_points, probe_radius)
 
 
@@ -327,6 +342,7 @@ def calculate_sasa_jax_soft(
     beta: float = 10.0,
 ) -> jnp.ndarray:
     """Differentiable single-pass JAX SASA."""
+    _log_single_pass_scratch(coords.shape[0], sphere_points.shape[0], soft=True)
     return _calculate_sasa_jax_soft_impl(
         coords, vdw_radii, mask, sphere_points,
         jnp.asarray(beta, dtype=jnp.float32), probe_radius,
@@ -365,6 +381,10 @@ def _dispatch_blocked_jax_scan(
     starts = jnp.asarray(starts_np)
     n_blocks = starts.shape[0]
     arange_b = jnp.arange(block_size, dtype=jnp.int32)
+    LOGGER.info(
+        "jax.sasa.scan: N=%d block=%d blocks=%d M=%d",
+        n_atoms, block_size, n_blocks, sphere_points.shape[0],
+    )
 
     def body(_carry, eff_start):
         block_coords = jax.lax.dynamic_slice_in_dim(masked_coords, eff_start, block_size, axis=0)
@@ -481,7 +501,31 @@ def _calculate_sasa_tinygrad_impl(
     return (areas * (n_accessible / sphere_points.shape[0])).realize()
 
 
-calculate_sasa_tinygrad = _TGTinyJit(_calculate_sasa_tinygrad_impl)
+# TinyJit is shape-captured, so a naked singleton
+# ``_TGTinyJit(_calculate_sasa_tinygrad_impl)`` raises ``JitError: args
+# mismatch`` the second time it's called with a different N or M. Cache
+# one JIT per ``(N, M)`` shape tuple — matches the block-kernel strategy
+# below.
+_sasa_tinygrad_jit_cache: dict[tuple[int, int], "_TGTinyJit"] = {}
+
+
+def calculate_sasa_tinygrad(coords, vdw_radii, mask, sphere_points, probe_radius: float = 1.4):
+    """Full-graph tinygrad SASA — compiled once per ``(N, M)`` shape tuple."""
+    key = (int(coords.shape[0]), int(sphere_points.shape[0]))
+    jit = _sasa_tinygrad_jit_cache.get(key)
+    if jit is None:
+        scratch_mb = key[0] * key[1] * key[0] * 4 / 1e6
+        LOGGER.info(
+            "tinygrad.sasa.single: compiling new TinyJit for N=%d M=%d "
+            "(scratch ~%.1f MB, cache size %d → %d)",
+            key[0], key[1], scratch_mb,
+            len(_sasa_tinygrad_jit_cache), len(_sasa_tinygrad_jit_cache) + 1,
+        )
+        jit = _TGTinyJit(_calculate_sasa_tinygrad_impl)
+        _sasa_tinygrad_jit_cache[key] = jit
+    else:
+        LOGGER.debug("tinygrad.sasa.single: TinyJit cache hit N=%d M=%d", *key)
+    return jit(coords, vdw_radii, mask, sphere_points, probe_radius)
 
 
 def _sasa_block_tinygrad_impl(
@@ -535,8 +579,20 @@ def _get_sasa_block_jit(block_size: int, n_atoms: int, n_sphere_points: int):
     key = (block_size, n_atoms, n_sphere_points)
     jit = _sasa_block_jit_cache.get(key)
     if jit is None:
+        scratch_mb = block_size * n_sphere_points * n_atoms * 4 / 1e6
+        LOGGER.info(
+            "tinygrad.sasa: compiling new TinyJit for block=%d N=%d M=%d "
+            "(scratch ~%.1f MB, cache size %d → %d)",
+            block_size, n_atoms, n_sphere_points, scratch_mb,
+            len(_sasa_block_jit_cache), len(_sasa_block_jit_cache) + 1,
+        )
         jit = _TGTinyJit(_sasa_block_tinygrad_impl)
         _sasa_block_jit_cache[key] = jit
+    else:
+        LOGGER.debug(
+            "tinygrad.sasa: TinyJit cache hit block=%d N=%d M=%d",
+            block_size, n_atoms, n_sphere_points,
+        )
     return jit
 
 

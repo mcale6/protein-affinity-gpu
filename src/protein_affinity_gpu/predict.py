@@ -8,6 +8,7 @@ API. :func:`predict_binding_affinity` routes by ``backend`` string.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -99,7 +100,12 @@ def _run_pipeline(
         )
 
     block_size = adapter.estimate_block_size(n_atoms, sphere_points)
-    with log_duration(LOGGER, f"{adapter.name}.sasa", extra=f"block={block_size}"):
+    with log_duration(
+        LOGGER,
+        f"{adapter.name}.sasa",
+        level=logging.INFO,
+        extra=f"N={n_atoms} M={sphere_points} block={block_size}",
+    ):
         complex_sasa = adapter.sasa(
             coords=complex_positions,
             vdw_radii=complex_radii,

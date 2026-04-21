@@ -5,6 +5,7 @@ import json
 import logging
 import sys
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -147,12 +148,18 @@ def run_benchmark(
         "results": [],
     }
 
+    LOGGER.info(
+        "benchmark: %d structures × %d targets × %d repeats",
+        len(structure_pairs), len(targets), repeats,
+    )
+
     for structure_path, sel in structure_pairs:
         try:
             n_atoms = _count_atoms(structure_path, sel)
         except Exception:  # noqa: BLE001
             n_atoms = None
 
+        LOGGER.info("benchmark: %s N=%s sel=%s", structure_path.stem, n_atoms, sel)
         for target in targets:
             if target == "cuda":
                 if not cuda_available():
@@ -197,20 +204,42 @@ def run_benchmark(
                 result["n_atoms"] = n_atoms
                 result["selection"] = sel
                 benchmark_report["results"].append(result)
+                LOGGER.info(
+                    "  %-12s ok  cold=%.2fs warm=%.1fms",
+                    target, result["cold_time_seconds"], result["warm_mean_seconds"] * 1000,
+                )
             except Exception as exc:  # noqa: BLE001
+                tb_tail = traceback.format_exc().splitlines()[-6:]
                 benchmark_report["results"].append(
                     {
                         "structure_id": structure_path.stem,
                         "target": target,
                         "status": "error",
                         "reason": f"{exc.__class__.__name__}: {exc}",
+                        "traceback_tail": tb_tail,
                         "n_atoms": n_atoms,
                         "selection": sel,
                     }
                 )
+                LOGGER.warning(
+                    "  %-12s ERR %s: %s", target, exc.__class__.__name__, str(exc)[:160],
+                )
 
     output_path = output_dir / "benchmark_results.json"
     output_path.write_text(json.dumps(benchmark_report, indent=2, cls=NumpyEncoder))
+
+    ok = sum(1 for r in benchmark_report["results"] if r.get("status") == "ok")
+    err = sum(1 for r in benchmark_report["results"] if r.get("status") == "error")
+    skipped = sum(1 for r in benchmark_report["results"] if r.get("status") == "skipped")
+    LOGGER.info("benchmark: finished ok=%d err=%d skipped=%d → %s", ok, err, skipped, output_path)
+    if err:
+        err_by_target: dict[str, int] = {}
+        for row in benchmark_report["results"]:
+            if row.get("status") == "error":
+                err_by_target[row["target"]] = err_by_target.get(row["target"], 0) + 1
+        for tgt, count in sorted(err_by_target.items()):
+            LOGGER.warning("  %d errors on target %s", count, tgt)
+
     return output_path, benchmark_report
 
 
@@ -302,7 +331,10 @@ def _plot_report(report: dict, out_path: Path) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
+    level = logging.INFO if args.verbose else logging.WARNING
+    logging.basicConfig(level=level, format="%(message)s")
+    # Also route package-scoped debug output so adapter/sasa logs surface.
+    logging.getLogger("protein_affinity_gpu").setLevel(level)
 
     if args.manifest is None and args.input_path is None:
         parser.error("Pass a structure path or --manifest PATH --structures-dir DIR.")
