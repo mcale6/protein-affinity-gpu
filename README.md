@@ -147,11 +147,18 @@ SASA kernel dispatch, and block-size heuristic:
 Force a JAX device with standard JAX environment variables, e.g.
 `JAX_PLATFORMS=cpu` or `JAX_PLATFORMS=cuda`.
 
-The tinygrad backend routes METAL/CUDA/GPU through `calculate_sasa_batch_tinygrad`
-(dot-product pairwise distances, one realized kernel per block) and falls back
-to the full `calculate_sasa_tinygrad` on CPU. Set `TINYGRAD_DEVICE=CPU|METAL|CUDA`
-to override device selection. Expect ~10–30× the CPU-freesasa wall time on
-large complexes — tinygrad kernels are recompiled on first call and then cached.
+The tinygrad backend exposes three SASA kernels via the `mode` kwarg on
+`predict_binding_affinity_tinygrad`:
+
+| `mode` | Scratch | When to use |
+|--------|---------|-------------|
+| `"block"` (default) | `[block, M, N]`, block≤768 | Default; bounded scratch, per-shape `TinyJit` cache. |
+| `"single"` | `[N, M, N]` | Fastest if it fits — single fused kernel; OOMs past ~5k atoms on 16 GB devices. |
+| `"neighbor"` | `[N, M, K]` (K=64 default) | Memory-constrained GPUs. ~80× less scratch than `single`; **slower** than `block` on Apple Metal (topk dominates). Lossless when K covers the worst-case occlusion-neighbor count. |
+
+Set `TINYGRAD_DEVICE=CPU|METAL|CUDA` to override device selection. Expect
+~10–30× the CPU-freesasa wall time on large complexes — tinygrad kernels are
+recompiled on first call and then cached per shape.
 
 ## Benchmark Fixtures
 
