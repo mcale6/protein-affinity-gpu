@@ -278,8 +278,15 @@ Speed (Apple Metal M-series, warm-mean ms, Kahraman 2013 T3, 16 structures):
 | 1HE8 | 7394 |  1 630.0 |   1 794.8 |    20 235.5 |  12.41× |
 
 ¹ `tg-single` and `tg-neighbor` both raised
-  `RuntimeError: Internal Error (0000000e:Internal Error)` on 1H1V — Metal
-  OOM at warm runs (~10 GB scratch for `single`).
+  `RuntimeError: Internal Error (0000000e:Internal Error)` on 1H1V at the
+  cold call. 1H1V runs fine in any mode in a fresh process — the failure
+  is sweep-induced: by the time it ran (15th of 16 structures) Metal had
+  ~14 different `(N, M)`-shaped JIT kernels cached, each holding compiled
+  binaries + persistent output buffers. The new `[5416, 100, 5416] ≈ 11.7 GB`
+  scratch (`single`) or `topk` intermediate (`neighbor`) couldn't fit under
+  the fragmented heap. `block` survives because its scratch is bounded at
+  `[768, 100, N]` regardless of N. Mitigation: run each mode in a separate
+  process, or clear `_sasa_block_jit_cache` between large-N structures.
 
 **Takeaway:** on Apple Metal `topk` is expensive enough that the saved scratch
 doesn't pay for itself — `tg-neighbor` is **1.45–19.19× slower** than
