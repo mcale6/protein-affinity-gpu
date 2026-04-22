@@ -187,10 +187,45 @@ def resolve_structure_path(structures_dir: Path, pdb_id: str) -> Path:
 
 
 def count_atom14_atoms(structure_path: Path, selection: str) -> int:
+    """Padded kernel atom count (``n_residues × 14``).
+
+    This is the N the SASA kernel actually dispatches over — it matches the
+    ``atoms=N`` printed by ``predict.py`` and is ~1.7× larger than
+    ``mask.sum()``. The timing plot needs the padded count so the x-axis
+    reflects real compute load rather than occupancy.
+    """
     target, binder = load_complex(structure_path, selection=selection, sanitize=True)
-    positions, mask, _, _ = compact_complex_atom14(target, binder)
-    del positions
-    return int(np.asarray(mask).sum())
+    positions, _mask, _, _ = compact_complex_atom14(target, binder)
+    return int(np.asarray(positions).shape[0])
+
+
+def _clear_tinygrad_caches() -> None:
+    """Drop every tinygrad SASA TinyJit cache and force a GC pass.
+
+    Each unique ``(block, N, M)`` compiles a fresh TinyJit and allocates
+    device-side scratch (~1–4 GB on Metal). Across a full benchmark sweep
+    the caches grow monotonically because every structure has a unique
+    padded N; Metal's resource heap eventually returns
+    ``Internal Error (0000000e)`` mid-sweep — not at a per-structure size
+    cliff, but as accumulated shader/buffer pressure.
+    """
+    import gc
+
+    try:
+        from protein_affinity_gpu.sasa import _sasa_block_jit_cache
+        _sasa_block_jit_cache.clear()
+    except ImportError:
+        pass
+    try:
+        from protein_affinity_gpu.sasa_experimental import (
+            _sasa_tinygrad_jit_cache,
+            _sasa_tinygrad_neighbor_jit_cache,
+        )
+        _sasa_tinygrad_jit_cache.clear()
+        _sasa_tinygrad_neighbor_jit_cache.clear()
+    except ImportError:
+        pass
+    gc.collect()
 
 
 # --- Per-backend runner --------------------------------------------------
@@ -289,6 +324,7 @@ def run_comparison(
 
     LOGGER.info("Loading predictors for: %s", ", ".join(backends))
     predictors = {name: BACKENDS[name].loader() for name in backends}
+    has_tinygrad = any(name.startswith("tinygrad") for name in backends)
 
     rows: list[dict[str, Any]] = []
     manifest_rows = load_manifest(manifest_path)
@@ -329,6 +365,8 @@ def run_comparison(
                 row[f"{prefix}_{metric_name}"] = value
 
         rows.append(row)
+        if has_tinygrad:
+            _clear_tinygrad_caches()
 
     summary = _build_summary(rows, backends, repeats, manifest_path, structures_dir)
 
@@ -507,7 +545,7 @@ def plot_figure(rows: list[dict[str, Any]], backends: list[str], output_path: Pa
             marker="o", linewidth=1.4, markersize=5,
             color=color, label=_display_name(name),
         )
-    ax_timing.set_xlabel("Atom14 atoms")
+    ax_timing.set_xlabel("Atom14 atoms (padded, n_residues × 14)")
     ax_timing.set_ylabel("Warm mean wall time (s)")
     ax_timing.set_yscale("log")
     ax_timing.set_title("Timing vs atom count")
