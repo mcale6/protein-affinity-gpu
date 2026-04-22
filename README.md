@@ -292,27 +292,11 @@ modal run benchmarks/modal_benchmark.py \
   the fused kernel, not a cache issue — use `jax-block` or `jax-scan` for
   those.
 
-- **tinygrad CUDA needs a real CUDA base image** on Modal. The slim image
-  with pip-only CUDA wheels does not provide the `libcuda.so` /
-  `libnvrtc.so` symlinks that tinygrad's lazy `ctypes` bindings expect,
-  and every call fails with `cuInit` missing. Both Modal scripts build on
-  `nvidia/cuda:12.4.1-runtime-ubuntu22.04` with `add_python="3.11"`.
-
 ### Setup
 
 ```bash
 uv sync --extra modal
 modal setup
-```
-
-### Artifact download
-
-If you did not pass `--local-output-dir`, download the volume contents
-with:
-
-```bash
-modal volume get protein-affinity-gpu-benchmarks \
-    runs/kahraman-a100 benchmarks/output/modal-kahraman-a100
 ```
 
 ## References
