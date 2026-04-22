@@ -33,8 +33,8 @@ Run the benchmark harness:
 # Default: CPU / JAX (block) / JAX (scan) with memory profiling
 .venv/bin/python benchmarks/benchmark.py benchmarks/fixtures --output-dir benchmarks/output
 
-# Experimental: also covers tinygrad, single-pass, neighbor-cutoff, soft-SASA
-.venv/bin/python benchmarks/benchmark_experimental.py benchmarks/fixtures --output-dir benchmarks/output
+# Notebook-style Kahraman sweep as a regular Python script
+.venv/bin/python benchmarks/sasa_benchmark.py --output-dir benchmarks/output/colab_sweep
 ```
 
 ### `protein-affinity-predict` flags
@@ -65,12 +65,13 @@ the full per-atom JSON to disk.
 | `input_path` | — | File or directory of structures. |
 | `--output-dir` | `benchmarks/output` | Destination for `benchmark_results.json`. |
 | `--repeats` | `3` | Runs per target; first is cold, rest averaged. |
-| `--targets` | `cpu cuda jax jax-scan` | Subset of `{cpu, cuda, jax, jax-scan}` for the default harness. Extended targets (`jax-single`, `jax-neighbor`, `jax-soft`, `tinygrad`, `tinygrad-neighbor`) live in `benchmark_experimental.py`. |
+| `--targets` | `cpu cuda jax jax-scan` | Subset of `{cpu, cuda, jax, jax-scan}` for the default harness. For the extended sweep (`jax-single`, `jax-neighbor`, `jax-soft`, `tinygrad`, `tinygrad-neighbor`), use `benchmarks/sasa_benchmark.py`. |
 | `--selection`, `--temperature`, `--distance-cutoff`, `--acc-threshold`, `--sphere-points` | — | Same meaning as `predict`. |
 | `--verbose` | off | `INFO`-level logging. |
 
 `cuda` is automatically reported as `skipped` when no CUDA device is
-detected. The harness is safe to run unconditionally in CI.
+detected, so the harness is safe to run unconditionally on hosts without
+a GPU.
 
 ## Python API
 
@@ -189,6 +190,35 @@ REQUIRE_GPU=1 bash benchmarks/run_kahraman_compare.sh
 ```
 
 The script downloads the required PDB files into `benchmarks/downloads/kahraman_2013_t3/` and writes CSV, JSON, and plot artifacts to `benchmarks/output/kahraman_2013_t3/`.
+
+## Modal Benchmark
+
+The Colab notebook has also been refactored into:
+
+- [benchmarks/sasa_benchmark.py](benchmarks/sasa_benchmark.py) for a normal local Python run
+- [benchmarks/modal_benchmark.py](benchmarks/modal_benchmark.py) for a Modal GPU run
+
+Setup:
+
+```bash
+python3 -m pip install -e ".[modal]"
+modal setup
+```
+
+Run the benchmark on Modal:
+
+```bash
+# Pick a GPU type with MODAL_GPU if you want something other than the default L4.
+MODAL_GPU=L4 modal run benchmarks/modal_benchmark.py --repeats 2 --run-name kahraman-l4
+
+# Optional quick smoke run over just the first 10 manifest rows.
+MODAL_GPU=L4 modal run benchmarks/modal_benchmark.py --limit 10 --run-name smoke-10
+
+# Download the output artifacts if you did not pass --local-output-dir.
+modal volume get protein-affinity-gpu-benchmarks runs/kahraman-l4 benchmarks/output/modal-kahraman-l4
+```
+
+If you pass `--local-output-dir benchmarks/output/modal-kahraman-l4`, the Modal entrypoint will also download `benchmark_results.json`, `benchmark_summary.json`, `benchmark_rows.csv`, `benchmark_warm_ms_wide.csv`, and `time_vs_atoms.png` back to your machine after the remote run completes.
 
 ## Development
 

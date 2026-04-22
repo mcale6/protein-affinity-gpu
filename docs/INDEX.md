@@ -44,7 +44,6 @@ differentiable soft-SASA) and their benchmark harness live behind
 | Default benchmark | [benchmarks/benchmark.py](../benchmarks/benchmark.py) |
 | Experimental benchmark | [benchmarks/benchmark_experimental.py](../benchmarks/benchmark_experimental.py) |
 | Test suite | [tests/](../tests) |
-| CI | [.github/workflows/ci.yml](../.github/workflows/ci.yml) |
 | Release script | [update_pkg.sh](../update_pkg.sh) |
 
 ---
@@ -57,7 +56,6 @@ protein-affinity-gpu/
 ├── README.md                  # User-facing quickstart
 ├── LICENSE
 ├── update_pkg.sh              # Bump version + build sdist/wheel
-├── .github/workflows/ci.yml   # pytest + build on push/PR (Python 3.11)
 ├── benchmarks/
 │   ├── benchmark.py              # Default harness: CPU / JAX (block, scan) + memory profiling
 │   ├── benchmark_experimental.py # Full sweep incl. tinygrad / single / neighbor / soft
@@ -381,9 +379,6 @@ Run with:
 python3 -m pip install -e ".[dev]"
 python3 -m pytest
 ```
-
-CI (GitHub Actions, Python 3.11) runs `pytest` and `python -m build` on every
-push and pull request.
 
 ---
 
