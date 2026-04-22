@@ -197,6 +197,34 @@ Bondi set, or a user-patched radius for a non-standard residue) by
 editing the file in place before installing, or by overriding
 `residue_library.default_library` at import time.
 
+## AFDesign Integration — soft-scan SASA
+
+The `add_ba_val_loss` helper in
+[`protein_affinity_gpu.af_design`](src/protein_affinity_gpu/af_design.py)
+attaches a PRODIGY IC-NIS ΔG term as an auxiliary ColabDesign / AfDesign
+loss. To make that term differentiable through the Shrake–Rupley
+buried-point test, it calls `calculate_sasa_batch_scan_soft` from
+[`protein_affinity_gpu.sasa_soft`](src/protein_affinity_gpu/sasa_soft.py)
+instead of the hard inference kernel. Two things change:
+
+- **Soft** replaces the binary `dist² ≤ (r+r_probe)²` occlusion test
+  with `sigmoid(β · (r² − dist²))`, using
+  `log(1 − σ(x)) = −softplus(x)` for numerical stability. Gradients
+  flow smoothly through the buried-point decision; as `β → ∞` the soft
+  kernel recovers the hard answer. Default `soft_sasa_beta = 10.0`.
+- **Scan** runs the blocked kernel through `jax.lax.scan`, so the
+  `[block, M_sphere_points, N_atoms]` scratch is materialised one block
+  at a time instead of all at once. With `checkpoint_body=True` (the
+  default inside `add_ba_val_loss`), per-block activations are
+  discarded on the forward pass and rematerialised on the backward
+  pass — essential inside AlphaFold's long backprop graph.
+
+Net effect: the SASA term contributes usable coordinate- and
+sequence-probability gradients to the design optimizer without
+blowing up AlphaFold2's backward-pass memory. See
+[docs/AF_DESIGN.md](docs/AF_DESIGN.md) for the soft vs hard contact /
+NIS / SASA analysis and the `aux["seq"]["soft"]` vs `"pseudo"` choice.
+
 ## Modal Benchmark
 
 The comparison figure below is committed at
