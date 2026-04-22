@@ -2,9 +2,11 @@
 
 `protein-affinity-gpu` is a research-friendly Python package for protein-protein binding affinity prediction, solvent-accessible surface area (SASA) analysis, and reproducible CPU/JAX benchmarking.
 
-The default surface is CPU + JAX (blocked and `lax.scan`-fused Shrake–Rupley).
-Tinygrad, single-pass / neighbor-cutoff JAX, and differentiable soft-SASA
-live behind `protein_affinity_gpu.experimental` — see
+Three first-class backends — CPU (freesasa via PRODIGY), JAX (blocked
+and `lax.scan`-fused Shrake–Rupley), and tinygrad (per-shape `TinyJit`
+block kernel on METAL / CUDA / GPU; full fused kernel on CPU / CLANG).
+Soft/differentiable SASA and the extra JAX modes (single-pass,
+neighbor-cutoff) are documented separately in
 [docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md).
 
 ## Installation
@@ -141,40 +143,41 @@ Save directly to disk with `results.save_results(output_dir)`.
 |---------|-------------|----------|------------------|
 | CPU (PRODIGY) | `predict_binding_affinity` | `prodigy-prot`, `freesasa` | n/a |
 | JAX | `predict_binding_affinity_jax` (`mode="block"`/`"scan"`) | `jax`, `jaxlib` | `jax.default_backend()` |
-| tinygrad *(experimental)* | `experimental.predict_binding_affinity_tinygrad` | `tinygrad` | `Device.DEFAULT`, override via `TINYGRAD_DEVICE` |
+| tinygrad | `predict_binding_affinity_tinygrad` (`mode="block"`/`"single"`/`"neighbor"`) | `tinygrad` | `Device.DEFAULT`, override via `TINYGRAD_DEVICE` |
 
-GPU backends share a single pipeline in `protein_affinity_gpu.predict`,
+Every backend shares one pipeline in `protein_affinity_gpu.predict`
 parametrized by a `BackendAdapter` (see `protein_affinity_gpu.backends`).
-Each adapter owns its device resolution, lazy constant materialization,
-SASA kernel dispatch, and block-size heuristic:
+Each adapter owns device resolution, lazy constant materialization, SASA
+kernel dispatch, and the block-size heuristic:
 
 - **JAX / CUDA** — `JAXAdapter.validate_size()` reads total GPU memory via
   `nvidia-smi` and raises `ValueError` if a complex exceeds the estimated
   ceiling; block size targets ~1 GB float32 scratch.
-- **JAX / Apple Metal** — assumes ~20 GB of unified memory and skips the
-  size check; block size comes from an empirical exp-decay fit.
+- **JAX / Apple Metal** — skips the size check (unified memory); block size
+  comes from an empirical exp-decay fit of throughput vs atom count.
 - **JAX / CPU** — conservative 100k-atom ceiling.
-- **tinygrad / METAL, CUDA, GPU** — batched SASA capped at `block=768`.
-- **tinygrad / CPU** — full (non-batched) SASA path.
+- **tinygrad / METAL, CUDA, GPU** — batched SASA with `block = min(768, N)`
+  via a per-shape `TinyJit` cache.
+- **tinygrad / CPU, CLANG** — full (non-batched) SASA kernel, also
+  `TinyJit`-wrapped.
 
 Force a JAX device with standard JAX environment variables, e.g.
-`JAX_PLATFORMS=cpu` or `JAX_PLATFORMS=cuda`.
+`JAX_PLATFORMS=cpu` or `JAX_PLATFORMS=cuda`. Set
+`TINYGRAD_DEVICE=CPU|METAL|CUDA` to override tinygrad's device choice.
 
-The experimental tinygrad backend (imported from
-`protein_affinity_gpu.experimental`) exposes three SASA kernels via the
-`mode` kwarg on `predict_binding_affinity_tinygrad`:
+The tinygrad backend exposes three SASA kernels via the `mode` kwarg on
+`predict_binding_affinity_tinygrad`:
 
 | `mode` | Scratch | When to use |
 |--------|---------|-------------|
-| `"block"` (default) | `[block, M, N]`, block≤768 | Default; bounded scratch, per-shape `TinyJit` cache. |
-| `"single"` | `[N, M, N]` | Fastest if it fits — single fused kernel; OOMs past ~5k atoms on 16 GB devices. |
-| `"neighbor"` | `[N, M, K]` (K=64 default) | Memory-constrained GPUs. ~80× less scratch than `single`; **slower** than `block` on Apple Metal (topk dominates). Lossless when K covers the worst-case occlusion-neighbor count. |
+| `"block"` (default) | `[block, M, N]`, `block ≤ 768` | Bounded scratch, per-shape `TinyJit` cache. Clear the cache (`sasa._sasa_block_jit_cache.clear()` + `gc.collect()`) between unrelated structures on Metal — each new shape pins ~1–4 GB and they accumulate across long sweeps. |
+| `"single"` | `[N, M, N]` | Fully fused single kernel — fastest when it fits. On Apple Metal handles up to ~12k atom14-padded atoms in isolation; Metal returns `Internal Error (0000000e)` under sustained compile pressure without cache clearing. |
+| `"neighbor"` | `[N, M, K]`, K=64 default | Memory-constrained GPUs — ~80× less scratch than `single` via `Tensor.topk` on negative squared distances. **Slower** than `block` on Apple Metal (`topk` dominates). Lossless when K covers the worst-case occlusion-neighbor count. |
 
-Set `TINYGRAD_DEVICE=CPU|METAL|CUDA` to override device selection. Expect
-~10–30× the CPU-freesasa wall time on large complexes — tinygrad kernels are
-recompiled on first call and then cached per shape. For the full
-experimental surface (including differentiable soft-SASA and the extended
-JAX modes), see [docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md).
+On the Kahraman 2013 T3 set (16 two-chain complexes, padded N ∈ [2.5k, 12.8k])
+the tinygrad block kernel runs at ~0.69 s warm-mean vs ~0.49 s for
+CPU freesasa — within 1.5× of CPU — with Pearson `r > 0.9998` against CPU on
+per-structure SASA totals and `r = 1.000` on ΔG, Kd, NIS and contact metrics.
 
 ## Benchmark Fixtures
 
