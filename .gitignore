@@ -35,3 +35,6 @@ benchmarks/output/
 .vscode/
 *.swp
 Thumbs.db
+
+# Claude Code local state
+.claude/

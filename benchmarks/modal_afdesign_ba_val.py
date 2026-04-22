@@ -253,10 +253,24 @@ def run_afdesign_binder(
     af_model.opt["weights"]["i_con"] = i_con_weight
     af_model.opt["weights"]["ba_val"] = ba_val_weight
 
+    import numpy as _np
+
+    binder_len_effective = int(getattr(af_model, "_binder_len", binder_len))
+    binder_ca_history: list[list[list[float]]] = []
+
+    def _capture_binder_ca(model) -> None:
+        atom_positions = model.aux.get("atom_positions")
+        if atom_positions is None:
+            return
+        atoms = _np.asarray(atom_positions)
+        # AlphaFold's 37-atom-type layout puts CA at index 1.
+        binder_ca = atoms[-binder_len_effective:, 1, :].tolist()
+        binder_ca_history.append(binder_ca)
+
     if design_mode == "soft":
-        af_model.design_soft(num_steps, temp=design_temp)
+        af_model.design_soft(num_steps, temp=design_temp, callback=_capture_binder_ca)
     else:
-        af_model.design_logits(num_steps)
+        af_model.design_logits(num_steps, callback=_capture_binder_ca)
 
     best_aux = af_model._tmp["best"].get("aux", af_model.aux)
     best_seq = af_model.get_seqs(get_best=True)
@@ -274,6 +288,9 @@ def run_afdesign_binder(
 
     sequences_path = output_dir / "best_sequences.json"
     sequences_path.write_text(json.dumps(best_seq, indent=2))
+
+    binder_ca_path = output_dir / "binder_ca_history.json"
+    binder_ca_path.write_text(json.dumps(binder_ca_history))
 
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -314,6 +331,7 @@ def run_afdesign_binder(
             "last_pdb": _volume_relative(last_pdb_path),
             "trajectory_json": _volume_relative(trajectory_path),
             "best_sequences_json": _volume_relative(sequences_path),
+            "binder_ca_history_json": _volume_relative(binder_ca_path),
         },
     }
 
