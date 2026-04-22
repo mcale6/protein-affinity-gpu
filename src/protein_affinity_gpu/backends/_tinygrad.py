@@ -13,10 +13,13 @@ import numpy as np
 from tinygrad import Device, Tensor
 
 from ..contacts import calculate_residue_contacts_tinygrad
-from ..sasa import calculate_sasa_batch_tinygrad, generate_sphere_points
+from ..sasa import (
+    calculate_sasa_batch_tinygrad,
+    calculate_sasa_tinygrad,
+    generate_sphere_points,
+)
 from ..sasa_experimental import (
     calculate_sasa_batch_tinygrad_bucketed,
-    calculate_sasa_tinygrad,
     calculate_sasa_tinygrad_neighbor,
 )
 from ..scoring import coefficient_tensors_tinygrad

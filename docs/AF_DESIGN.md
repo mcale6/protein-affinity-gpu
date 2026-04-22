@@ -124,6 +124,90 @@ The important contrast is:
 - soft sigmoids and softplus produce smooth local gradients that the optimizer
   can actually follow
 
+## What `ba_val` Actually Optimizes
+
+The `ba_val` callback does not optimize `beta` directly. Instead, it computes a
+scalar binding-energy proxy `dg` from the current AlphaFold structure and the
+current binder sequence representation, and that scalar becomes one term in the
+full AfDesign objective.
+
+The path is:
+
+```text
+sequence logits
+-> binder sequence probabilities / pseudo-sequence
+-> target-binder contacts
+-> complex SASA
+-> relative SASA
+-> NIS percentages
+-> PRODIGY IC-NIS linear score (dg)
+-> weighted total loss
+```
+
+More concretely:
+
+- contacts are grouped into PRODIGY interaction classes
+- SASA is computed on the whole complex and converted to relative SASA
+- NIS percentages are derived from the relative SASA values
+- those six features are fed into the PRODIGY linear model
+
+The final `dg` term is:
+
+```text
+dg =
+  -0.09459 * IC_CC
+  -0.10007 * IC_CA
+  +0.19577 * IC_PP
+  -0.22671 * IC_PA
+  +0.18681 * P_NIS_A
+  +0.13810 * P_NIS_C
+  -15.9433
+```
+
+where:
+
+- `IC_CC` = charged-charged interface contacts
+- `IC_CA` = charged-apolar interface contacts
+- `IC_PP` = polar-polar interface contacts
+- `IC_PA` = polar-apolar interface contacts
+- `P_NIS_A` = percent apolar non-interacting surface
+- `P_NIS_C` = percent charged non-interacting surface
+
+In the Modal benchmark, this is then weighted as one part of the full design
+loss:
+
+```text
+total_loss = other_afdesign_terms + ba_val_weight * dg
+```
+
+So with a positive `ba_val_weight`, the optimizer is pushed toward structures
+and sequences that make the predicted `dg` more favorable under the PRODIGY
+IC-NIS model.
+
+## What `beta` Does and Does Not Do
+
+The `beta` parameters in the soft helpers are fixed hyperparameters. They are
+not learned model parameters in the current implementation.
+
+What `beta` does:
+
+- controls how sharp the soft contact switch is
+- controls how sharp the soft SASA buried-point decision is
+- controls how sharp the soft NIS exposure threshold is
+- changes the size and locality of the gradient near each decision boundary
+
+What `beta` does not do:
+
+- it is not optimized by backpropagation in `add_ba_val_loss(...)`
+- it is not part of the final PRODIGY linear score by itself
+- it does not change what features the loss uses, only how smoothly those
+  features are computed
+
+So the clean mental model is:
+
+- `dg` is the objective term being minimized
+- `beta` shapes the differentiable path used to compute `dg`
+
 ## What Changes Theoretically During Optimization
 
 If you compare a soft-design run against a more non-soft run, the main ML/DL

@@ -47,8 +47,11 @@ Stable differentiable AFDesign helpers live in
 | Logging helpers | [src/protein_affinity_gpu/utils/logging_utils.py](../src/protein_affinity_gpu/utils/logging_utils.py) |
 | Structure loader | [src/protein_affinity_gpu/utils/structure.py](../src/protein_affinity_gpu/utils/structure.py) |
 | CLI — predict | [src/protein_affinity_gpu/cli/predict.py](../src/protein_affinity_gpu/cli/predict.py) |
-| Default benchmark | [benchmarks/benchmark.py](../benchmarks/benchmark.py) |
-| Experimental benchmark | [benchmarks/benchmark_experimental.py](../benchmarks/benchmark_experimental.py) |
+| Local benchmark harness (M2 / CPU) | [benchmarks/benchmark.py](../benchmarks/benchmark.py) |
+| Modal GPU benchmark harness | [benchmarks/modal_benchmark.py](../benchmarks/modal_benchmark.py) |
+| Benchmark plot merger | [benchmarks/plot_results.py](../benchmarks/plot_results.py) |
+| Shared benchmark helpers | [benchmarks/sasa/sasa_benchmark.py](../benchmarks/sasa/sasa_benchmark.py) |
+| JAX block-size profiler | [benchmarks/sasa/profile_sasa.py](../benchmarks/sasa/profile_sasa.py) |
 | Test suite | [tests/](../tests) |
 | Release script | [update_pkg.sh](../update_pkg.sh) |
 
@@ -63,9 +66,12 @@ protein-affinity-gpu/
 ├── LICENSE
 ├── update_pkg.sh              # Bump version + build sdist/wheel
 ├── benchmarks/
-│   ├── benchmark.py              # Default harness: CPU / JAX (block, scan) + memory profiling
-│   ├── benchmark_experimental.py # Full sweep incl. tinygrad / single / neighbor / soft
-│   ├── run.py                    # Standalone entry into the default benchmark
+│   ├── benchmark.py              # Local harness (Apple M2 / CPU): cpu + tinygrad single/batch
+│   ├── modal_benchmark.py        # Modal GPU harness: jax single/batch/scan + tinygrad single/batch
+│   ├── plot_results.py           # Merge N results.csv files + render 3-panel comparison figure
+│   ├── sasa/
+│   │   ├── sasa_benchmark.py     # Shared helpers (BACKENDS, run_benchmark, manifest/download)
+│   │   └── profile_sasa.py       # Single-complex JAX block-size sweep (estimator vs observed)
 │   └── fixtures/1A2K.pdb         # Canonical two-chain complex used by tests
 ├── src/protein_affinity_gpu/
 │   ├── __init__.py            # Public API (lazy-loads impls)
@@ -73,9 +79,9 @@ protein-affinity-gpu/
 │   ├── predict.py             # Unified pipeline + `predict(backend=…)` router + jax entry point
 │   ├── experimental.py        # Experimental entry points (tinygrad, jax-experimental)
 │   ├── cpu.py                 # PRODIGY + freesasa CPU pipeline
-│   ├── sasa.py                # Default SASA kernels (JAX block + scan)
+│   ├── sasa.py                # Benchmarked SASA kernels: JAX single/batch/scan + tinygrad single/batch
 │   ├── sasa_soft.py           # Stable differentiable JAX SASA kernels
-│   ├── sasa_experimental.py   # Experimental SASA kernels + soft compatibility re-exports
+│   ├── sasa_experimental.py   # Experimental SASA kernels (neighbor-cutoff, bucketed) + soft re-exports
 │   ├── contacts.py            # Residue contacts + interaction class counts
 │   ├── contacts_soft.py       # Stable differentiable residue-contact probabilities
 │   ├── scoring.py             # NISCoefficients + backend-agnostic scoring primitives
@@ -218,18 +224,20 @@ Constructs `JAXAdapter(mode=mode)` and delegates to `_run_pipeline`.
 | Function | Notes |
 |----------|-------|
 | `generate_sphere_points(n)` | Golden-spiral sphere point distribution as `[n, 3]` float32 numpy. Adapters wrap with their native tensor type. |
+| `calculate_sasa_jax(coords, vdw_radii, mask, sphere_points, probe_radius=1.4)` | Fully-fused single-pass `@jit` SASA — `[N, M, N]` peak scratch. Emits an `info`/`warning` log (via `_log_single_pass_scratch`) estimating the scratch size so OOMs are obvious. Reached through `JAXExperimentalAdapter(mode="single")`. |
 | `calculate_sasa_batch(coords, vdw_radii, mask, block_size, sphere_points, probe_radius=1.4)` | Blocked Shrake–Rupley (JAX): Python dispatcher over a `@jit`'d per-block kernel using `|a−b|² = a² + b² − 2⟨a,b⟩`. `[B, N]` inter-mask computed inline via `block_abs_idx` — no upfront `[N, N]` realize. Tail block uses `effective_start` so the kernel compiles once. |
 | `calculate_sasa_batch_scan(...)` | Same blocked kernel as `calculate_sasa_batch`, dispatched via `jax.lax.scan` so the whole sweep compiles as one program; body is wrappable with `jax.checkpoint` for AlphaFold-style memory-efficient backprop. |
-| `calculate_sasa_jax(coords, vdw_radii, mask, sphere_points, probe_radius=1.4)` | Fully-fused single-pass `@jit` SASA — `[N, M, N]` peak scratch. Emits an `info`/`warning` log (via `_log_single_pass_scratch`) estimating the scratch size so OOMs are obvious. Reached through `JAXExperimentalAdapter(mode="single")`. |
+| `calculate_sasa_tinygrad(coords, vdw_radii, mask, sphere_points, probe_radius=1.4)` | Tinygrad analog of `calculate_sasa_jax` — fully-fused single TinyJit pass, `[N, M, N]` peak scratch; JIT cached per `(N, M)` shape tuple. Reached through `TinygradAdapter(mode="single")`. |
 | `calculate_sasa_batch_tinygrad(..., block_size=...)` | Per-block `TinyJit` kernel with per-`(block, N, M)` cache; per-block output is detached to numpy on each iteration to dodge TinyJit's persistent output-buffer aliasing. Default path on accelerator tinygrad devices via `TinygradAdapter(mode="block")`. |
 
 Each wrapper calls `_log_device_memory(tag)` after `block_until_ready()` so
 the reading reflects the actual compute. The log line is a single
 `key=value` string — `rss_mb` from `resource.getrusage` on any platform,
 `jax_in_use_mb` / `jax_peak_mb` from `jax.devices()[0].memory_stats()` on
-GPU. Tags: `jax.sasa.block`, `jax.sasa.scan`, `jax.sasa.single`,
-`tinygrad.sasa.block`. Enable via `setup_logging("INFO")` or `--verbose` in
-the CLIs.
+GPU, `tg_mem_used_mb` from `tinygrad.helpers.GlobalCounters`. Tags:
+`jax.sasa.single`, `jax.sasa.block`, `jax.sasa.scan`,
+`tinygrad.sasa.single`, `tinygrad.sasa.block`. Enable via
+`setup_logging("INFO")` or `--verbose` in the CLIs.
 
 Stable differentiable SASA kernels
 (`calculate_sasa_jax_soft`, `calculate_sasa_batch_soft`,
@@ -317,27 +325,66 @@ protein-affinity-predict <input_path> \
 - `--backend tinygrad` lazy-loads the experimental tinygrad adapter; the
   default-surface backends are `cpu` and `jax`.
 
-### 4.2 `protein-affinity-benchmark`
+### 4.2 Benchmark harnesses (`benchmarks/`)
+
+Benchmarking is deliberately kept out of the installed CLI. Two runners
+cover the `(local CPU)` + `(remote GPU)` split, and a third merges both
+outputs into a single figure:
 
 ```bash
-protein-affinity-benchmark <input_path> \
-    [--output-dir benchmarks/output] \
-    [--repeats 3] \
-    [--targets cpu cuda jax jax-scan] \
-    [--selection A,B] \
-    [--temperature 25.0] [--distance-cutoff 5.5] \
-    [--acc-threshold 0.05] [--sphere-points 100] [--verbose]
+# Local — Apple M2 / any CPU box. cpu needs prodigy-prot + freesasa.
+python benchmarks/benchmark.py \
+    --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
+    --structures-dir benchmarks/downloads/kahraman_2013_t3 \
+    --output-dir benchmarks/output/local \
+    --targets cpu tinygrad-single tinygrad-batch
+
+# Remote — Modal GPU (A100-80GB by default; set MODAL_GPU to override).
+modal run benchmarks/modal_benchmark.py \
+    --targets jax-single,jax-batch,jax-scan,tinygrad-single,tinygrad-batch \
+    --local-output-dir benchmarks/output/gpu
+
+# Merge + plot — takes N results.csv files, merges on pdb_id.
+python benchmarks/plot_results.py \
+    benchmarks/output/local/results.csv \
+    benchmarks/output/gpu/results.csv \
+    --output-dir benchmarks/output/combined
 ```
 
-- The default harness ([`benchmarks/benchmark.py`](../benchmarks/benchmark.py))
-  runs the `cpu`, `jax` (blocked), and `jax-scan` targets and additionally
-  records peak process RSS and (on GPU) JAX `peak_bytes_in_use` per run.
-- `cuda` is auto-skipped if no GPU/CUDA device is found.
-- Writes `<output-dir>/benchmark_results.json` and echoes the report to stdout.
-- For tinygrad / single-pass / neighbor-cutoff / soft-SASA targets, use the
-  experimental harness in
-  [`benchmarks/benchmark_experimental.py`](../benchmarks/benchmark_experimental.py)
-  (see [EXPERIMENTAL.md §4](EXPERIMENTAL.md)).
+Both runners share
+[`benchmarks/sasa/sasa_benchmark.py`](../benchmarks/sasa/sasa_benchmark.py),
+so the CSV schema is identical and the two outputs merge cleanly. Each
+row is `{pdb_id, chain1, chain2, n_atoms_atom14, device}` plus one
+`{backend}_status / _error / _cold_seconds / _warm_mean_seconds /
+_rss_peak_mb / _jax_peak_mb / _tg_mem_used_mb / _ba_val / _kd /
+_sasa_sum / _contacts_* / _nis_*` column group per backend. Modal rejects
+the `cpu` target because the image does not install `prodigy-prot` or
+`freesasa`; run `cpu` locally.
+
+#### Benchmark target modes
+
+All six targets benchmark the same Shrake–Rupley algorithm through
+different kernels and dispatchers. The two-axis view (algorithm × block
+dispatch) reads across this table:
+
+| Target | Kernel in `sasa.py` | Algorithm | Block dispatch | Peak scratch | Backprop-friendly |
+|--------|---------------------|-----------|----------------|--------------|-------------------|
+| `cpu` | — (`freesasa` via `prodigy-prot`) | Shrake–Rupley reference | N/A | — | ❌ |
+| `jax-single` | `calculate_sasa_jax` | Fully fused, no blocking | — (no loop) | `[N, M, N]` fp32 (~57 GB at N=12 k, M=100) | ✅ |
+| `jax-batch` | `calculate_sasa_batch` | Blocked | **Python** loop over a `@jit`'d per-block kernel | `[B, M, N]` per call | ✅ |
+| `jax-scan` | `calculate_sasa_batch_scan` | Blocked (same kernel as `jax-batch`) | **`jax.lax.scan`** fuses the loop into one XLA program | `[B, M, N]` per block, one program | ✅ + `jax.checkpoint` (AlphaFold `layer_stack` pattern) |
+| `tinygrad-single` | `calculate_sasa_tinygrad` | Fully fused, no blocking | — (no loop) | `[N, M, N]` fp32 | ❌ |
+| `tinygrad-batch` | `calculate_sasa_batch_tinygrad` | Blocked | **Python** loop over a `TinyJit`'d per-block kernel | `[B, M, N]` per call | ❌ |
+
+- **Cross-backend pairs** (same algorithm on different engines): `jax-single` ↔ `tinygrad-single`, `jax-batch` ↔ `tinygrad-batch`.
+- **Algorithm comparison** (fused vs blocked, same engine): `jax-single` vs `jax-batch` / `jax-scan`; `tinygrad-single` vs `tinygrad-batch`.
+- **Dispatcher comparison** (within JAX): `jax-batch` (Python-driven) vs `jax-scan` (XLA-fused). Tinygrad has no `lax.scan` equivalent, so the batched tinygrad kernel mirrors `jax-batch`.
+
+The tinygrad block kernel caches one `TinyJit` per unique `(B, N, M)`
+triple, and the tinygrad single-pass kernel caches per `(N, M)`; across a
+sweep these pin ~1–4 GB of Metal scratch each. The shared harness calls
+`sasa_benchmark.clear_tinygrad_caches()` between structures so Metal
+does not return `Internal Error (0000000e)` under accumulated pressure.
 
 ---
 
@@ -388,7 +435,9 @@ Located under [`tests/`](../tests). Common fixture: `benchmarks/fixtures/1A2K.pd
 | `test_structure.py` | `load_complex` sanitizes H, water, and non-selected chains. |
 | `test_regression.py` | CPU vs JAX prediction stay within `|ΔΔG| < 0.75` and `|ΔIC| < 10`. Skips if JAX / prodigy-prot / freesasa are missing. |
 | `test_tinygrad_smoke.py` | Tinygrad (experimental) prediction returns finite ΔG, within `|ΔΔG| < 0.75` and `|ΔIC| < 10` of the CPU reference. |
-| `test_benchmark_smoke.py` | Benchmark harness runs with mocked predictor; CUDA is reported as skipped when unavailable. |
+| `test_benchmark_smoke.py` | Local benchmark runner produces `results.csv` + `summary.json` with the unified schema; unknown backend names are rejected. |
+| `test_plot_results.py` | Multiple `results.csv` files merge on `pdb_id`; figure render path writes a non-empty PNG. |
+| `test_sasa_benchmark.py` | Shared benchmark helpers: backend registry, manifest round-trip, atom-count + memory snapshot + metrics extraction. |
 | `test_resources.py` | Packaged `vdw.radii` is accessible via `read_text_resource`. |
 | `test_residue_library.py` | `ResidueLibrary.radii_matrix` has the expected shape. |
 | `test_results.py` | `ProdigyResults.save_results` round-trips through JSON. |

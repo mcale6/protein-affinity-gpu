@@ -29,7 +29,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from statistics import mean
+from statistics import mean, stdev
 from typing import Any, Callable, Iterable, Sequence
 
 import numpy as np
@@ -258,29 +258,46 @@ def count_atom14_atoms(structure_path: Path, selection: str) -> int:
 
 # --- Cache management (tinygrad TinyJit resource pressure) --------------
 
-def clear_tinygrad_caches() -> None:
-    """Drop every tinygrad SASA TinyJit cache and force a GC pass.
+def clear_accelerator_caches() -> None:
+    """Drop per-shape JIT caches and force a GC pass.
 
-    Each unique ``(block, N, M)`` compiles a fresh TinyJit and pins device
-    scratch. Across a full sweep the caches grow monotonically; on Metal
-    this surfaces as ``Internal Error (0000000e)`` mid-sweep. Clearing
-    after each structure keeps the sweep stable.
+    Each structure has a unique ``N`` so the prior compilation is dead
+    weight for the next one. We wipe:
+
+    * tinygrad ``_sasa_block_jit_cache`` / ``_sasa_tinygrad_jit_cache`` —
+      each unique ``(block, N, M)`` pins device scratch; on Metal the
+      accumulation surfaces as ``Internal Error (0000000e)`` mid-sweep.
+    * JAX compilation cache via ``jax.clear_caches()`` — each XLA program
+      holds a device-buffer reservation for its scratch; without clearing,
+      reservations accumulate across the 16-structure sweep and OOM the
+      large structures even on an A100-80GB.
     """
     try:
-        from protein_affinity_gpu.sasa import _sasa_block_jit_cache
+        from protein_affinity_gpu.sasa import (
+            _sasa_block_jit_cache,
+            _sasa_tinygrad_jit_cache,
+        )
         _sasa_block_jit_cache.clear()
+        _sasa_tinygrad_jit_cache.clear()
     except ImportError:
         pass
     try:
         from protein_affinity_gpu.sasa_experimental import (
-            _sasa_tinygrad_jit_cache,
             _sasa_tinygrad_neighbor_jit_cache,
         )
-        _sasa_tinygrad_jit_cache.clear()
         _sasa_tinygrad_neighbor_jit_cache.clear()
     except ImportError:
         pass
+    try:
+        import jax  # type: ignore
+
+        jax.clear_caches()
+    except Exception:  # noqa: BLE001
+        pass
     gc.collect()
+
+
+clear_tinygrad_caches = clear_accelerator_caches  # legacy alias
 
 
 # --- Memory profiling ---------------------------------------------------
@@ -383,6 +400,9 @@ def run_backend_on_structure(
     cold = timings[0]
     warm = timings[1:]
     warm_mean = mean(warm) if warm else cold
+    warm_std = stdev(warm) if len(warm) > 1 else 0.0
+    warm_min = min(warm) if warm else cold
+    warm_max = max(warm) if warm else cold
     result_dict = last_result.to_dict() if last_result is not None else None
     metrics = extract_scalar_metrics(result_dict) if result_dict is not None else {}
 
@@ -396,6 +416,9 @@ def run_backend_on_structure(
         "cold_time_formatted": format_duration(cold),
         "warm_times_seconds": warm,
         "warm_mean_seconds": warm_mean,
+        "warm_std_seconds": warm_std,
+        "warm_min_seconds": warm_min,
+        "warm_max_seconds": warm_max,
         "warm_mean_formatted": format_duration(warm_mean),
         "rss_peak_mb": _peak("rss_mb"),
         "jax_peak_mb": _peak("jax_peak_mb"),
@@ -411,6 +434,9 @@ def _apply_backend_result_to_row(
     row[f"{backend}_error"] = result.get("error")
     row[f"{backend}_cold_seconds"] = result.get("cold_time_seconds")
     row[f"{backend}_warm_mean_seconds"] = result.get("warm_mean_seconds")
+    row[f"{backend}_warm_std_seconds"] = result.get("warm_std_seconds")
+    row[f"{backend}_warm_min_seconds"] = result.get("warm_min_seconds")
+    row[f"{backend}_warm_max_seconds"] = result.get("warm_max_seconds")
     row[f"{backend}_rss_peak_mb"] = result.get("rss_peak_mb")
     row[f"{backend}_jax_peak_mb"] = result.get("jax_peak_mb")
     row[f"{backend}_tg_mem_used_mb"] = result.get("tg_mem_used_mb")
@@ -434,7 +460,11 @@ def _backend_columns(backends: Iterable[str]) -> list[str]:
     cols: list[str] = []
     for name in backends:
         cols.extend([f"{name}_status", f"{name}_error"])
-        cols.extend([f"{name}_cold_seconds", f"{name}_warm_mean_seconds"])
+        cols.extend([
+            f"{name}_cold_seconds", f"{name}_warm_mean_seconds",
+            f"{name}_warm_std_seconds", f"{name}_warm_min_seconds",
+            f"{name}_warm_max_seconds",
+        ])
         cols.extend(f"{name}_{mem}" for mem in MEMORY_FIELDS)
         cols.extend(f"{name}_{metric}" for metric in SCALAR_METRICS)
     return cols
@@ -547,7 +577,9 @@ def run_benchmark(
         "benchmark: device=%s backends=%s", device_label, ", ".join(backends)
     )
     predictors = {name: BACKENDS[name].loader() for name in backends}
-    has_tinygrad = any(name.startswith("tinygrad") for name in backends)
+    needs_clear = any(
+        name.startswith("tinygrad") or name.startswith("jax") for name in backends
+    )
 
     rows: list[dict[str, Any]] = []
     manifest_rows = load_manifest_rows(manifest_to_use)
@@ -583,8 +615,8 @@ def run_benchmark(
             _apply_backend_result_to_row(row, name, result)
 
         rows.append(row)
-        if has_tinygrad:
-            clear_tinygrad_caches()
+        if needs_clear:
+            clear_accelerator_caches()
 
     rows_path = output_dir / "results.csv"
     summary_path = output_dir / "summary.json"

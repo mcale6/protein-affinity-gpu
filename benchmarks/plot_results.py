@@ -172,10 +172,15 @@ def plot_figure(
     ax_timing, ax_sasa, ax_heat = axes
 
     # --- Subplot 1: timing vs atom count -------------------------------
+    import matplotlib.ticker as mticker
     for name in backends:
         ok = _ok_rows(rows, name)
         points = [
-            (r.get("n_atoms_atom14"), r.get(f"{name}_warm_mean_seconds"))
+            (
+                r.get("n_atoms_atom14"),
+                r.get(f"{name}_warm_mean_seconds"),
+                r.get(f"{name}_warm_std_seconds"),
+            )
             for r in ok
             if r.get("n_atoms_atom14") is not None
             and r.get(f"{name}_warm_mean_seconds") is not None
@@ -185,17 +190,47 @@ def plot_figure(
         points.sort(key=lambda p: p[0])
         xs = np.asarray([p[0] for p in points], dtype=float)
         ys = np.asarray([p[1] for p in points], dtype=float)
-        ax_timing.plot(
-            xs, ys,
-            marker="o", linewidth=1.4, markersize=5,
-            color=_BACKEND_COLORS.get(name),
-            label=_display_name(name),
+        stds = np.asarray(
+            [p[2] if p[2] is not None else np.nan for p in points], dtype=float,
         )
+        colds = np.asarray(
+            [r.get(f"{name}_cold_seconds") for r in ok
+             if r.get(f"{name}_cold_seconds") is not None],
+            dtype=float,
+        )
+        label = _display_name(name)
+        if colds.size:
+            label += f"  (compile {np.median(colds):.2f}s)"
+        color = _BACKEND_COLORS.get(name)
+        if np.any(np.isfinite(stds)):
+            ax_timing.errorbar(
+                xs, ys, yerr=np.where(np.isfinite(stds), stds, 0.0),
+                marker="o", linewidth=1.4, markersize=5,
+                capsize=3, elinewidth=1.0, color=color,
+                ecolor=color, alpha=0.95,
+                label=label,
+            )
+        else:
+            ax_timing.plot(
+                xs, ys,
+                marker="o", linewidth=1.4, markersize=5,
+                color=color, label=label,
+            )
     ax_timing.set_xlabel("Atom14 atoms (padded, n_residues × 14)")
-    ax_timing.set_ylabel("Warm mean wall time (s)")
+    ax_timing.set_ylabel("Warm wall time (s, mean ± std over repeats)")
     ax_timing.set_yscale("log")
     ax_timing.set_title("Timing vs atom count")
-    ax_timing.grid(alpha=0.25, which="both")
+    ax_timing.yaxis.set_major_locator(mticker.LogLocator(base=10.0, numticks=15))
+    ax_timing.yaxis.set_minor_locator(
+        mticker.LogLocator(base=10.0, subs=np.arange(2, 10) * 0.1, numticks=15)
+    )
+    ax_timing.yaxis.set_major_formatter(mticker.ScalarFormatter())
+    ax_timing.yaxis.set_minor_formatter(
+        mticker.FuncFormatter(lambda v, _: f"{v:g}" if v in (0.2, 0.3, 0.5, 2, 3, 5) else "")
+    )
+    ax_timing.tick_params(axis="y", which="minor", labelsize=7)
+    ax_timing.grid(alpha=0.25, which="major")
+    ax_timing.grid(alpha=0.12, which="minor")
     ax_timing.legend(fontsize=8, loc="upper left")
 
     # --- Subplot 2: per-structure SASA-sum, CPU vs each backend -------

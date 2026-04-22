@@ -26,6 +26,7 @@ from .sasa import (
     _precompute_sasa_inputs,
     calculate_sasa_batch,
     calculate_sasa_batch_tinygrad,
+    calculate_sasa_tinygrad,
 )
 from .sasa_soft import (
     calculate_sasa_batch_scan_soft,
@@ -110,76 +111,6 @@ def calculate_sasa_jax_neighbor(
     )
     out.block_until_ready()
     _log_device_memory("jax.sasa.neighbor")
-    return out
-
-
-# --- Tinygrad single-pass kernel ----------------------------------------
-
-def _calculate_sasa_tinygrad_impl(
-    coords,
-    vdw_radii,
-    mask,
-    sphere_points,
-    probe_radius: float = 1.4,
-):
-    """Fully vectorized Shrake–Rupley SASA — single TinyJit-fused pass.
-
-    Dot-product identity ``|a−b|² = |a|² + |b|² − 2⟨a,b⟩`` for both the
-    ``[N, N]`` interaction mask and the ``[N, M, N]`` sphere-point pass —
-    mask scratch is ``[N, N]`` float32 instead of ``[N, N, 3]``.
-    """
-    masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
-        coords, vdw_radii, mask, probe_radius
-    )
-
-    dot_nn = masked_coords @ masked_coords.transpose(-1, -2)              # [N, N]
-    dist2_inter = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn
-    radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2
-    not_eye = _TGTensor.eye(coords.shape[0], dtype=_tg_dtypes.bool) == 0
-    interaction_matrix = (dist2_inter <= radsum2) & not_eye
-
-    scaled_points = (
-        sphere_points[None, :, :] * radii_with_probe[:, None, None]
-        + masked_coords[:, None, :]
-    )  # [N, M, 3]
-    scaled_norm2 = (scaled_points * scaled_points).sum(axis=-1)           # [N, M]
-    dot = scaled_points @ masked_coords.transpose(-1, -2)                 # [N, M, N]
-    dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
-
-    is_buried = (dist2 <= radii_probe_sq[None, None, :]) & interaction_matrix[:, None, :]
-    buried_points = is_buried.max(axis=-1).sum(axis=-1)
-    n_accessible = sphere_points.shape[0] - buried_points
-
-    areas = 4.0 * math.pi * radii_probe_sq
-    return (areas * (n_accessible / sphere_points.shape[0])).realize()
-
-
-# TinyJit is shape-captured, so a naked singleton
-# ``_TGTinyJit(_calculate_sasa_tinygrad_impl)`` raises ``JitError: args
-# mismatch`` the second time it's called with a different N or M. Cache
-# one JIT per ``(N, M)`` shape tuple — matches the block-kernel strategy
-# below.
-_sasa_tinygrad_jit_cache: dict[tuple[int, int], "_TGTinyJit"] = {}
-
-
-def calculate_sasa_tinygrad(coords, vdw_radii, mask, sphere_points, probe_radius: float = 1.4):
-    """Full-graph tinygrad SASA — compiled once per ``(N, M)`` shape tuple."""
-    key = (int(coords.shape[0]), int(sphere_points.shape[0]))
-    jit_fn = _sasa_tinygrad_jit_cache.get(key)
-    if jit_fn is None:
-        scratch_mb = key[0] * key[1] * key[0] * 4 / 1e6
-        LOGGER.info(
-            "tinygrad.sasa.single: compiling new TinyJit for N=%d M=%d "
-            "(scratch ~%.1f MB, cache size %d → %d)",
-            key[0], key[1], scratch_mb,
-            len(_sasa_tinygrad_jit_cache), len(_sasa_tinygrad_jit_cache) + 1,
-        )
-        jit_fn = _TGTinyJit(_calculate_sasa_tinygrad_impl)
-        _sasa_tinygrad_jit_cache[key] = jit_fn
-    else:
-        LOGGER.debug("tinygrad.sasa.single: TinyJit cache hit N=%d M=%d", *key)
-    out = jit_fn(coords, vdw_radii, mask, sphere_points, probe_radius)
-    _log_device_memory("tinygrad.sasa.single")
     return out
 
 

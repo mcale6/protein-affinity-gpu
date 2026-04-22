@@ -56,7 +56,11 @@ REMOTE_RUNS_DIR = REMOTE_VOLUME_ROOT / "runs"
 
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-runtime-ubuntu22.04",
+        add_python="3.11",
+    )
+    .apt_install("clang", "git")
     .pip_install(
         "biopython",
         "numpy>=1.23,<3.0",
@@ -65,6 +69,13 @@ image = (
         "matplotlib",
         "pandas",
     )
+    .workdir("/root")
+    .env({
+        "PYTHONPATH": "/root:/root/src",
+        "CUDA": "1",
+        "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.95",
+        "JAX_DEFAULT_MATMUL_PRECISION": "highest",
+    })
     .add_local_dir(
         "src",
         remote_path="/root/src",
@@ -80,8 +91,6 @@ image = (
             "**/__pycache__/**",
         ],
     )
-    .workdir("/root")
-    .env({"PYTHONPATH": "/root:/root/src"})
 )
 app = modal.App(APP_NAME, image=image)
 
@@ -129,6 +138,35 @@ def run_remote_benchmark(
 ) -> dict[str, object]:
     logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s", force=True)
     logging.getLogger("protein_affinity_gpu").setLevel(logging.INFO)
+
+    import subprocess
+    try:
+        smi = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,memory.total,memory.free,driver_version",
+             "--format=csv,noheader"], capture_output=True, text=True, timeout=10,
+        )
+        LOGGER.info("nvidia-smi: %s", smi.stdout.strip())
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("nvidia-smi probe failed: %s", exc)
+    try:
+        import jax  # type: ignore
+        dev = jax.devices()[0]
+        stats = dev.memory_stats() or {}
+        LOGGER.info(
+            "jax.device=%s  pool_bytes_limit=%.1fGB  peak_bytes_in_use=%.1fGB",
+            dev, stats.get("pool_bytes_limit", 0) / 1e9,
+            stats.get("peak_bytes_in_use", 0) / 1e9,
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("jax device probe failed: %s", exc)
+    try:
+        from ctypes.util import find_library
+        LOGGER.info(
+            "tinygrad CUDA deps: libcuda=%s libnvrtc=%s",
+            find_library("cuda"), find_library("nvrtc"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("CUDA lib probe failed: %s", exc)
 
     resolved_run_name = run_name.strip() or datetime.now(timezone.utc).strftime(
         "gpu-benchmark-%Y%m%d-%H%M%S"
