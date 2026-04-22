@@ -241,3 +241,41 @@ For AfDesign-style `ba_val` optimization, the recommended default is:
 
 That gives the cleanest differentiable path while keeping the underlying
 PRODIGY-style score structure intact.
+
+## TODO
+
+### Isolate initialization from optimizer in "soft vs hard" comparisons
+
+`benchmarks/modal_afdesign_ba_val.py` currently calls:
+
+```python
+af_model.restart(seed=seed, mode=["gumbel", "soft"], reset_opt=False)
+```
+
+independently of `design_mode`. So the "soft" and "hard-ish" runs share:
+
+- the same seed
+- the same initial logits (gumbel-sampled, passed through softmax)
+
+and only differ in:
+
+- the optimizer step (`design_soft` vs `design_logits`)
+- `binder_seq_mode` (soft probabilities vs straight-through pseudo-sequence)
+- `use_soft_contacts` / `use_soft_nis`
+
+SASA stays soft in both because `add_ba_val_loss(...)` always uses
+`calculate_sasa_batch_scan_soft(...)` internally.
+
+This means the current "soft vs hard-ish" A/B is really measuring the effect of
+the optimizer and the contact/NIS softness, not a clean hard/soft SASA split.
+Two follow-ups worth doing:
+
+1. Expose a `use_soft_sasa` toggle in `add_ba_val_loss(...)` and wire it up in
+   the Modal entrypoint, so a true hard-SASA baseline is reachable.
+2. Consider varying the `restart(mode=...)` initialization to match the design
+   mode (e.g. a pure-gumbel or one-hot init for `design_logits` runs) if we
+   want to isolate "optimizer shape" from "init shape".
+
+Until (1) lands, runs from `modal_afdesign_ba_val.py` with
+`use_soft_contacts=false` and `use_soft_nis=false` should be reported as
+"hard-ish" rather than a true hard baseline.
