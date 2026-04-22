@@ -246,7 +246,7 @@ PRODIGY-style score structure intact.
 
 ### Isolate initialization from optimizer in "soft vs hard" comparisons
 
-`benchmarks/modal_afdesign_ba_val.py` currently calls:
+`af_design/modal_afdesign_ba_val.py` currently calls:
 
 ```python
 af_model.restart(seed=seed, mode=["gumbel", "soft"], reset_opt=False)

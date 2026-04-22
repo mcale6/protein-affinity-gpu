@@ -73,6 +73,9 @@ protein-affinity-gpu/
 │   │   ├── sasa_benchmark.py     # Shared helpers (BACKENDS, run_benchmark, manifest/download)
 │   │   └── profile_sasa.py       # Single-complex JAX block-size sweep (estimator vs observed)
 │   └── fixtures/1A2K.pdb         # Canonical two-chain complex used by tests
+├── af_design/
+│   ├── modal_afdesign_ba_val.py  # Modal entrypoint: AfDesign binder hallucination + ba_val loss
+│   └── plot_afdesign_rmsd.py     # Binder CA RMSD vs iteration plot (soft vs hard-ish)
 ├── src/protein_affinity_gpu/
 │   ├── __init__.py            # Public API (lazy-loads impls)
 │   ├── version.py             # __version__ (read by Hatch)

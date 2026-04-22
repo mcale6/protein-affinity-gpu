@@ -336,7 +336,7 @@ modal setup
   helper in `protein_affinity_gpu.af_design` plugs into ColabDesign's
   AfDesign binder-hallucination protocol as an auxiliary loss; the
   Modal entrypoint at
-  [`benchmarks/modal_afdesign_ba_val.py`](benchmarks/modal_afdesign_ba_val.py)
+  [`af_design/modal_afdesign_ba_val.py`](af_design/modal_afdesign_ba_val.py)
   installs `ColabDesign@v1.1.1` directly from the upstream repo.
 - **NACCESS / Van der Waals radii** — Hubbard, S.J., Thornton, J.M.
   *NACCESS (computer program).* Department of Biochemistry and Molecular
