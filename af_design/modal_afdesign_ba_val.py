@@ -163,6 +163,7 @@ def run_afdesign_binder(
     chain: str = "B",
     binder_len: int = 20,
     binder_chain: str = "",
+    hotspot: str = "",
     run_name: str = "",
     num_steps: int = 80,
     sphere_points: int = 100,
@@ -196,6 +197,7 @@ def run_afdesign_binder(
     filter_ipae_max: float = 0.4,
     filter_icon_min: float = 3.5,
     filter_ipsae_min: float = 0.6,
+    save_trajectory: bool = True,
 ) -> dict[str, object]:
     logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s", force=True)
 
@@ -243,6 +245,8 @@ def run_afdesign_binder(
         prep_kwargs["binder_chain"] = binder_chain.strip()
     else:
         prep_kwargs["binder_len"] = binder_len
+    if hotspot.strip():
+        prep_kwargs["hotspot"] = hotspot.strip()
     af_model.prep_inputs(**prep_kwargs)
 
     add_ba_val_loss(
@@ -278,6 +282,10 @@ def run_afdesign_binder(
     binder_len_effective = int(getattr(af_model, "_binder_len", binder_len))
     binder_ca_history: list[list[list[float]]] = []
     bsa_history: list[float] = []
+    traj_positions: list[_np.ndarray] = []
+    traj_aatype: list[_np.ndarray] = []
+    traj_atom_mask: list[_np.ndarray] = []
+    traj_plddt: list[_np.ndarray] = []
 
     _radii_matrix_np = _np.asarray(
         _residue_library.radii_matrix, dtype=_np.float32
@@ -335,6 +343,16 @@ def run_afdesign_binder(
             sasa_target.sum() + sasa_binder.sum() - sasa_complex.sum()
         )
         bsa_history.append(bsa)
+
+        if save_trajectory:
+            traj_positions.append(atoms.copy())
+            traj_aatype.append(aatype_np.copy())
+            traj_atom_mask.append(atom_mask_np.copy())
+            plddt_arr = model.aux.get("plddt")
+            if plddt_arr is not None:
+                traj_plddt.append(_np.asarray(plddt_arr).copy())
+            else:
+                traj_plddt.append(_np.zeros(total_len, dtype=_np.float32))
 
     if three_stage:
         # Stage 1 runs with the ``ba_val`` PRODIGY ΔG term zeroed out: before
@@ -435,6 +453,47 @@ def run_afdesign_binder(
     bsa_history_path = output_dir / "bsa_history.json"
     bsa_history_path.write_text(json.dumps(bsa_history))
 
+    trajectory_pdb_path: Path | None = None
+    if save_trajectory and traj_positions:
+        from colabdesign.af.alphafold.common import protein as _af_protein
+
+        residue_index_arr = _np.asarray(af_model._inputs["residue_index"])
+        total_len_traj = traj_positions[0].shape[0]
+        target_len_traj = total_len_traj - binder_len_effective
+        chain_index_arr = _np.zeros(total_len_traj, dtype=_np.int32)
+        chain_index_arr[target_len_traj:] = 1
+        if residue_index_arr.shape[0] != total_len_traj:
+            residue_index_arr = _np.arange(total_len_traj, dtype=_np.int32)
+
+        pdb_frames: list[str] = []
+        for frame_i, (pos, aat, mask) in enumerate(
+            zip(traj_positions, traj_aatype, traj_atom_mask)
+        ):
+            plddt_frame = (
+                traj_plddt[frame_i]
+                if frame_i < len(traj_plddt)
+                else _np.zeros(total_len_traj, dtype=_np.float32)
+            )
+            b_factors = 100.0 * mask * plddt_frame[..., None]
+            prot = _af_protein.Protein(
+                atom_positions=pos,
+                aatype=aat,
+                atom_mask=mask,
+                residue_index=residue_index_arr,
+                chain_index=chain_index_arr,
+                b_factors=b_factors,
+            )
+            frame_pdb = _af_protein.to_pdb(prot)
+            atom_lines = [
+                line for line in frame_pdb.splitlines()
+                if line.startswith(("ATOM", "HETATM", "TER"))
+            ]
+            pdb_frames.append(
+                f"MODEL {frame_i + 1:>8}\n" + "\n".join(atom_lines) + "\nENDMDL\n"
+            )
+        trajectory_pdb_path = output_dir / "trajectory.pdb"
+        trajectory_pdb_path.write_text("".join(pdb_frames) + "END\n")
+
     best_metrics = _to_serializable(best_aux.get("log", {}))
     if isinstance(best_metrics, dict):
         if ipsae_value is not None:
@@ -479,6 +538,7 @@ def run_afdesign_binder(
         "chain": chain,
         "binder_len": binder_len,
         "binder_chain": binder_chain,
+        "hotspot": hotspot,
         "num_steps": num_steps,
         "effective_steps": effective_steps,
         "stage_schedule": stage_schedule,
@@ -516,6 +576,10 @@ def run_afdesign_binder(
             "best_sequences_json": _volume_relative(sequences_path),
             "binder_ca_history_json": _volume_relative(binder_ca_path),
             "bsa_history_json": _volume_relative(bsa_history_path),
+            **(
+                {"trajectory_pdb": _volume_relative(trajectory_pdb_path)}
+                if trajectory_pdb_path is not None else {}
+            ),
         },
     }
 
@@ -533,6 +597,7 @@ def main(
     chain: str = "B",
     binder_len: int = 20,
     binder_chain: str = "",
+    hotspot: str = "",
     run_name: str = "",
     num_steps: int = 80,
     sphere_points: int = 100,
@@ -566,6 +631,7 @@ def main(
     filter_ipae_max: float = 0.4,
     filter_icon_min: float = 3.5,
     filter_ipsae_min: float = 0.6,
+    save_trajectory: bool = True,
     local_output_dir: str = "",
 ):
     local_pdb_path = Path(pdb_path).expanduser().resolve()
@@ -581,6 +647,7 @@ def main(
         chain=chain,
         binder_len=binder_len,
         binder_chain=binder_chain,
+        hotspot=hotspot,
         run_name=run_name,
         num_steps=num_steps,
         sphere_points=sphere_points,
@@ -614,6 +681,7 @@ def main(
         filter_ipae_max=filter_ipae_max,
         filter_icon_min=filter_icon_min,
         filter_ipsae_min=filter_ipsae_min,
+        save_trajectory=save_trajectory,
     )
 
     if local_output_dir.strip():
