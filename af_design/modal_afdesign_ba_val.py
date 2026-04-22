@@ -171,13 +171,15 @@ def run_afdesign_binder(
     soft_sasa_beta: float = 10.0,
     contact_beta: float = 8.0,
     nis_beta: float = 20.0,
-    rg_weight: float = 0.5,
+    rg_weight: float = 0.3,
     helix_weight: float = -0.2,
     plddt_weight: float = 0.1,
     pae_weight: float = 0.1,
     i_pae_weight: float = 0.1,
-    i_con_weight: float = 2.0,
-    ba_val_weight: float = 2.0,
+    i_con_weight: float = 1.0,
+    con_weight: float = 1.0,
+    iptm_weight: float = 0.05,
+    ba_val_weight: float = 0.3,
     seed: int = 0,
     use_multimer: bool = False,
     use_soft_contacts: bool = True,
@@ -185,6 +187,15 @@ def run_afdesign_binder(
     binder_seq_mode: str = "soft",
     design_mode: str = "logits",
     design_temp: float = 1.0,
+    three_stage: bool = True,
+    logits_iters: int = 75,
+    soft_iters: int = 45,
+    hard_iters: int = 10,
+    filter_plddt_min: float = 0.8,
+    filter_iptm_min: float = 0.5,
+    filter_ipae_max: float = 0.4,
+    filter_icon_min: float = 3.5,
+    filter_ipsae_min: float = 0.6,
 ) -> dict[str, object]:
     logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s", force=True)
 
@@ -257,6 +268,8 @@ def run_afdesign_binder(
     af_model.opt["weights"]["pae"] = pae_weight
     af_model.opt["weights"]["i_pae"] = i_pae_weight
     af_model.opt["weights"]["i_con"] = i_con_weight
+    af_model.opt["weights"]["con"] = con_weight
+    af_model.opt["weights"]["i_ptm"] = iptm_weight
     af_model.opt["weights"]["ba_val"] = ba_val_weight
 
     import numpy as _np
@@ -324,13 +337,87 @@ def run_afdesign_binder(
         )
         bsa_history.append(bsa)
 
-    if design_mode == "soft":
-        af_model.design_soft(num_steps, temp=design_temp, callback=_capture_design_state)
+    if three_stage:
+        # Stage 1 runs with the ``ba_val`` PRODIGY ΔG term zeroed out: before
+        # contacts actually form, PRODIGY's IC-NIS score collapses to the
+        # −15.94 intercept plus regression-coefficient noise, so its gradient
+        # wastes budget that the AF-native structural terms could use.
+        # Re-enable it for stage 2+, once the binder has been folded and
+        # approximately placed.
+        af_model.opt["weights"]["ba_val"] = 0.0
+        af_model.design_logits(logits_iters, callback=_capture_design_state)
+        af_model.opt["weights"]["ba_val"] = ba_val_weight
+        af_model.design_soft(soft_iters, temp=design_temp, callback=_capture_design_state)
+        af_model.design_hard(hard_iters, callback=_capture_design_state)
+        effective_steps = int(logits_iters + soft_iters + hard_iters)
+        stage_schedule = {
+            "mode": "three_stage",
+            "logits_iters": int(logits_iters),
+            "soft_iters": int(soft_iters),
+            "hard_iters": int(hard_iters),
+        }
     else:
-        af_model.design_logits(num_steps, callback=_capture_design_state)
+        if design_mode == "soft":
+            af_model.design_soft(num_steps, temp=design_temp, callback=_capture_design_state)
+        else:
+            af_model.design_logits(num_steps, callback=_capture_design_state)
+        effective_steps = int(num_steps)
+        stage_schedule = {"mode": f"single_{design_mode}", "num_steps": int(num_steps)}
 
     best_aux = af_model._tmp["best"].get("aux", af_model.aux)
     best_seq = af_model.get_seqs(get_best=True)
+
+    # ---- ipSAE (Dunbrack) from best aux pAE: interface score over
+    # ---- inter-chain residue pairs confident under pAE. pAE matrix is
+    # ---- in Angstroms (0-31.75); normalised logs use /31 internally.
+    def _compute_ipsae(pae_mat, target_len_, binder_len_, pae_cutoff: float = 10.0):
+        if pae_mat is None:
+            return None
+        pae_arr = _np.asarray(pae_mat, dtype=_np.float32)
+        if pae_arr.ndim == 3:
+            pae_arr = pae_arr[0]
+        total_needed = target_len_ + binder_len_
+        if pae_arr.ndim != 2 or pae_arr.shape[0] < total_needed:
+            return None
+        # Defensive: if the matrix looks normalised, scale back to Å.
+        if float(pae_arr.max()) <= 1.0 + 1e-3:
+            pae_arr = pae_arr * 31.0
+        upper = pae_arr[:target_len_, target_len_:total_needed]
+        lower = pae_arr[target_len_:total_needed, :target_len_]
+        pae_inter = 0.5 * (upper + lower.T)
+        mask = pae_inter < pae_cutoff
+        n_conf = int(mask.sum())
+        if n_conf == 0:
+            return 0.0
+        d0 = max(1.24 * (n_conf - 15) ** (1.0 / 3.0) - 1.8, 0.5)
+        scores = 1.0 / (1.0 + (pae_inter / d0) ** 2)
+        return float((scores * mask).sum() / n_conf)
+
+    total_len_best = None
+    target_len_best = None
+    try:
+        atom_pos_best = best_aux.get("atom_positions")
+        if atom_pos_best is not None:
+            total_len_best = int(_np.asarray(atom_pos_best).shape[0])
+            target_len_best = total_len_best - binder_len_effective
+    except Exception:  # noqa: BLE001
+        pass
+
+    ipsae_value = None
+    if target_len_best is not None and target_len_best > 0:
+        ipsae_value = _compute_ipsae(
+            best_aux.get("pae"), target_len_best, binder_len_effective
+        )
+
+    # BSA readouts: ``max_bsa`` is the largest interface ever seen across the
+    # trajectory (best-case diagnostic — ColabDesign doesn't track a per-step
+    # BSA-at-best-loss index for us), ``final_bsa`` is the last frame.
+    if bsa_history:
+        max_bsa = float(max(bsa_history))
+        final_bsa = float(bsa_history[-1])
+    else:
+        max_bsa = None
+        final_bsa = None
     best_pdb_path = output_dir / "best_design.pdb"
     last_pdb_path = output_dir / "last_design.pdb"
     af_model.save_pdb(str(best_pdb_path), get_best=True)
@@ -352,6 +439,43 @@ def run_afdesign_binder(
     bsa_history_path = output_dir / "bsa_history.json"
     bsa_history_path.write_text(json.dumps(bsa_history))
 
+    best_metrics = _to_serializable(best_aux.get("log", {}))
+    if isinstance(best_metrics, dict):
+        if ipsae_value is not None:
+            best_metrics["ipSAE"] = ipsae_value
+        if max_bsa is not None:
+            # ``bsa`` is the best-of-trajectory interface area — see the
+            # ``max_bsa`` / ``final_bsa`` explainer above.
+            best_metrics["bsa"] = max_bsa
+            best_metrics["bsa_final"] = final_bsa
+
+    def _cmp(value, threshold, mode: str) -> dict[str, object]:
+        ok = False
+        if value is not None:
+            try:
+                if mode == "min":
+                    ok = float(value) >= float(threshold)
+                else:
+                    ok = float(value) <= float(threshold)
+            except (TypeError, ValueError):
+                ok = False
+        return {
+            "value": value,
+            "threshold": threshold,
+            "direction": mode,
+            "pass": bool(ok),
+        }
+
+    bm = best_metrics if isinstance(best_metrics, dict) else {}
+    filter_gate = {
+        "plddt":  _cmp(bm.get("plddt"),  filter_plddt_min, "min"),
+        "i_ptm":  _cmp(bm.get("i_ptm"),  filter_iptm_min, "min"),
+        "i_pae":  _cmp(bm.get("i_pae"),  filter_ipae_max, "max"),
+        "i_con":  _cmp(bm.get("i_con"),  filter_icon_min, "min"),
+        "ipSAE":  _cmp(bm.get("ipSAE"),  filter_ipsae_min, "min"),
+    }
+    filter_gate["all_pass"] = bool(all(v["pass"] for v in filter_gate.values()))
+
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "gpu": GPU_TYPE,
@@ -362,6 +486,8 @@ def run_afdesign_binder(
         "binder_len": binder_len,
         "binder_chain": binder_chain,
         "num_steps": num_steps,
+        "effective_steps": effective_steps,
+        "stage_schedule": stage_schedule,
         "sphere_points": sphere_points,
         "distance_cutoff": distance_cutoff,
         "acc_threshold": acc_threshold,
@@ -381,10 +507,13 @@ def run_afdesign_binder(
             "pae": pae_weight,
             "i_pae": i_pae_weight,
             "i_con": i_con_weight,
+            "con": con_weight,
+            "i_ptm": iptm_weight,
             "ba_val": ba_val_weight,
         },
+        "filters": filter_gate,
         "best_sequences": best_seq,
-        "best_metrics": _to_serializable(best_aux.get("log", {})),
+        "best_metrics": best_metrics,
         "losses": _to_serializable(best_aux.get("losses", {})),
         "artifacts": {
             "best_pdb": _volume_relative(best_pdb_path),
@@ -418,13 +547,15 @@ def main(
     soft_sasa_beta: float = 10.0,
     contact_beta: float = 8.0,
     nis_beta: float = 20.0,
-    rg_weight: float = 0.5,
+    rg_weight: float = 0.3,
     helix_weight: float = -0.2,
     plddt_weight: float = 0.1,
     pae_weight: float = 0.1,
     i_pae_weight: float = 0.1,
-    i_con_weight: float = 2.0,
-    ba_val_weight: float = 2.0,
+    i_con_weight: float = 1.0,
+    con_weight: float = 1.0,
+    iptm_weight: float = 0.05,
+    ba_val_weight: float = 0.3,
     seed: int = 0,
     use_multimer: bool = False,
     use_soft_contacts: bool = True,
@@ -432,6 +563,15 @@ def main(
     binder_seq_mode: str = "soft",
     design_mode: str = "logits",
     design_temp: float = 1.0,
+    three_stage: bool = True,
+    logits_iters: int = 75,
+    soft_iters: int = 45,
+    hard_iters: int = 10,
+    filter_plddt_min: float = 0.8,
+    filter_iptm_min: float = 0.5,
+    filter_ipae_max: float = 0.4,
+    filter_icon_min: float = 3.5,
+    filter_ipsae_min: float = 0.6,
     local_output_dir: str = "",
 ):
     local_pdb_path = Path(pdb_path).expanduser().resolve()
@@ -461,6 +601,8 @@ def main(
         pae_weight=pae_weight,
         i_pae_weight=i_pae_weight,
         i_con_weight=i_con_weight,
+        con_weight=con_weight,
+        iptm_weight=iptm_weight,
         ba_val_weight=ba_val_weight,
         seed=seed,
         use_multimer=use_multimer,
@@ -469,6 +611,15 @@ def main(
         binder_seq_mode=binder_seq_mode,
         design_mode=design_mode,
         design_temp=design_temp,
+        three_stage=three_stage,
+        logits_iters=logits_iters,
+        soft_iters=soft_iters,
+        hard_iters=hard_iters,
+        filter_plddt_min=filter_plddt_min,
+        filter_iptm_min=filter_iptm_min,
+        filter_ipae_max=filter_ipae_max,
+        filter_icon_min=filter_icon_min,
+        filter_ipsae_min=filter_ipsae_min,
     )
 
     if local_output_dir.strip():

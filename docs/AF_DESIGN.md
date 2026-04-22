@@ -1,5 +1,28 @@
 # AFDesign Notes
 
+> **Scope caveat — where validation actually happens.** AFDesign gives you a
+> *structural scaffold* for a binder, not a validated binder. In current practice
+> (BindCraft, Bennett et al. 2023, RFdiffusion+ProteinMPNN stacks), the design
+> pass is followed by two mandatory refinement steps: **(i) ProteinMPNN
+> sequence resampling** of the binder onto the designed backbone (Dauparas et al.
+> 2022, Science), and **(ii) AlphaFold monomer re-prediction** of the MPNN
+> sequences (the "chain trick": fold the binder *alone* with AF2 monomer and
+> check the binder Cα RMSD vs. the designed backbone, plus re-fold the complex).
+> Only designs that survive this re-prediction filter are ordered. **None of
+> that is wired up in this repo yet** — treat `best_sequences` from
+> `modal_afdesign_ba_val.py` as optimiser snapshots, not candidates. The
+> `ba_val` term (PRODIGY IC-NIS ΔG) is intentionally an **auxiliary smoother
+> with a small weight (≤0.3)**; it is not the primary driver and not a
+> substitute for MPNN+AF re-prediction. See `References` at the end of this
+> document.
+>
+> **Future work:** hotspot-aware design — a hotspot MSE term (binder centroid
+> pulled toward a target-residue centroid) and a contact mask that restricts
+> `i_con` to listed hotspot residues — is the highest-leverage addition per the
+> current literature (see Bennett et al. 2023 and the Improved RFdiffusion
+> 2024 paper). Both are short additions to `add_ba_val_loss(...)` / the Modal
+> entrypoint but not in scope for the current pass.
+
 This note explains the stable differentiable helpers that now live in:
 
 - `protein_affinity_gpu.af_design`
@@ -259,6 +282,35 @@ upward into the ~200–1500 Å² range typical of natural protein-protein
 interfaces. Plot it with `af_design/plot_afdesign_traj.py --metric bsa`
 (or `--metric both` for the RMSD + BSA two-panel).
 
+### Stage 1 runs with `ba_val` zeroed
+
+In the three-stage cascade, `ba_val` (PRODIGY IC-NIS ΔG) is zero-weighted
+during `design_logits` and only restored for `design_soft` +
+`design_hard`:
+
+- stage 1 (`design_logits`, 75 iters) — `weights["ba_val"] = 0.0`
+- stage 2 (`design_soft`, 45 iters) — `weights["ba_val"] = ba_val_weight`
+- stage 3 (`design_hard`, 10 iters) — inherits stage 2 weights
+
+Why: before the binder has actually folded and placed into contact,
+PRODIGY's IC-NIS score collapses to the constant −15.94 intercept plus
+regression-coefficient noise over ~zero contacts. Its gradient in that
+regime is just noise, and it eats optimiser budget that the AF-native
+structural terms (pLDDT, pAE, contacts, rg) could use to find the
+interface. Once stage 2 starts, the binder has a fold and an
+approximate placement, so the PRODIGY ΔG gradient starts carrying real
+binding-affinity signal.
+
+Consequence: the raw `loss` scalar across stages is not directly
+comparable — stage 1 minimises a purely structural objective, stage 2+
+adds the ΔG term. Compare runs by per-metric values (`i_ptm`, `i_con`,
+`ba_val`, BSA), not by `loss`.
+
+BSA logging stays on for all stages — it is a diagnostic, not a loss,
+so zero-contact frames correctly log BSA ≈ 0 and do not distort the
+objective. A per-step `i_con` gate that skips the hard-SASA calls when
+no contacts exist is a cheap future optimisation, not required.
+
 ## TODO
 
 ### Isolate initialization from optimizer in "soft vs hard" comparisons
@@ -298,3 +350,22 @@ Two follow-ups worth doing:
 Until (1) lands, runs from `modal_afdesign_ba_val.py` with
 `use_soft_contacts=false` and `use_soft_nis=false` should be reported as
 "hard-ish" rather than a true hard baseline.
+
+## References
+
+- Dauparas, J. et al. **Robust deep learning–based protein sequence design
+  using ProteinMPNN.** *Science* 378, 49–56 (2022).
+  https://www.science.org/doi/10.1126/science.add2187
+- Bennett, N. R. et al. **Improving de novo protein binder design with deep
+  learning.** *Nature Communications* 14, 2625 (2023).
+  https://www.nature.com/articles/s41467-023-38328-5
+- Pacesa, M. et al. **BindCraft: one-shot design of functional protein
+  binders.** *Nature* (2025). https://www.nature.com/articles/s41586-025-09429-6
+- Watson, J. L. et al. **De novo design of protein structure and function with
+  RFdiffusion.** *Nature* 620, 1089–1100 (2023).
+  https://www.nature.com/articles/s41586-023-06415-8
+- **ColabDesign / AFDesign.** https://github.com/sokrypton/ColabDesign
+- **ipSAE (Dunbrack interface score).**
+  https://levitate.bio/fixing-the-flaws-in-alphafolds-interface-scoring-meet-dunbracks-ipsae/
+- Full research notes for this pipeline:
+  `claudedocs/research_binder_design_20260422-135154.md`.
