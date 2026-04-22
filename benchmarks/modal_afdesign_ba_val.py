@@ -69,7 +69,7 @@ image = (
     .pip_install(
         "biopython",
         "numpy>=1.23,<3.0",
-        "jax[cuda12]",
+        "jax[cuda12]<0.5",
         "tinygrad",
         COLABDESIGN_GIT_URL,
     )
