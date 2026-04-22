@@ -64,8 +64,11 @@ REMOTE_PARAMS_DIR = REMOTE_AF_DATA_DIR / "params"
 
 volume = modal.Volume.from_name(VOLUME_NAME, create_if_missing=True)
 image = (
-    modal.Image.debian_slim(python_version="3.11")
-    .apt_install("git")
+    modal.Image.from_registry(
+        "nvidia/cuda:12.4.1-runtime-ubuntu22.04",
+        add_python="3.11",
+    )
+    .apt_install("clang", "git")
     .pip_install(
         "biopython",
         "numpy>=1.23,<3.0",
@@ -77,6 +80,8 @@ image = (
         {
             "PYTHONPATH": "/root:/root/src",
             "TF_CPP_MIN_LOG_LEVEL": "3",
+            "XLA_PYTHON_CLIENT_MEM_FRACTION": "0.95",
+            "JAX_DEFAULT_MATMUL_PRECISION": "highest",
         }
     )
     .workdir("/root")

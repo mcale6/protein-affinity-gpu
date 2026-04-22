@@ -249,12 +249,15 @@ def _dispatch_blocked_jax_scan(
     sphere_points: jnp.ndarray,
     block_size: int,
     *extra_kernel_args,
+    checkpoint_body: bool = False,
 ) -> jnp.ndarray:
     """Same blocked sweep as :func:`_dispatch_blocked_jax`, fused into one ``lax.scan``.
 
     Compiles once per ``(N, block_size, M)``, no per-block Python dispatch.
-    Differentiable; wrap the ``body`` with ``jax.checkpoint`` for ``O(carry)``
-    memory training (AlphaFold pattern).
+    Differentiable; set ``checkpoint_body=True`` to wrap the body with
+    ``jax.checkpoint`` for ``O(carry)`` memory training (AlphaFold pattern) —
+    needed when the whole sweep sits inside a backward pass and per-block
+    activations would otherwise dominate peak memory.
     """
     n_atoms = masked_coords.shape[0]
     starts_np, block_size = _scan_block_starts(n_atoms, block_size)
@@ -277,7 +280,8 @@ def _dispatch_blocked_jax_scan(
         )
         return _carry, counts
 
-    _, all_counts = jax.lax.scan(body, None, starts)  # [n_blocks, block_size]
+    scan_body = jax.checkpoint(body) if checkpoint_body else body
+    _, all_counts = jax.lax.scan(scan_body, None, starts)  # [n_blocks, block_size]
 
     # Stitch valid windows. Only the last block can overlap (effective_start
     # was pulled back); take all rows of the leading n_blocks-1 blocks plus

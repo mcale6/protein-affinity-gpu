@@ -103,8 +103,13 @@ def calculate_sasa_batch_scan_soft(
     sphere_points: jnp.ndarray,
     probe_radius: float = 1.4,
     beta: float = 10.0,
+    checkpoint_body: bool = False,
 ) -> jnp.ndarray:
-    """Differentiable blocked JAX SASA via ``jax.lax.scan``."""
+    """Differentiable blocked JAX SASA via ``jax.lax.scan``.
+
+    Set ``checkpoint_body=True`` when this call sits inside an AlphaFold-style
+    backward pass — it swaps per-block activation memory for recomputation.
+    """
     masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
         coords,
         vdw_radii,
@@ -121,6 +126,7 @@ def calculate_sasa_batch_scan_soft(
         sphere_points,
         block_size,
         beta_array,
+        checkpoint_body=checkpoint_body,
     )
     n_points = sphere_points.shape[0]
     areas = 4.0 * jnp.pi * radii_probe_sq

@@ -1,6 +1,6 @@
 # protein-affinity-gpu
 
-`protein-affinity-gpu` is a research-friendly Python package for protein-protein binding affinity prediction, solvent-accessible surface area (SASA) analysis, and reproducible CPU/JAX benchmarking.
+`protein-affinity-gpu` is a research-friendly Python package for protein-protein binding affinity prediction, solvent-accessible surface area (SASA) analysis, and reproducible CPU/JAX/tinygrad benchmarking.
 
 Three first-class backends — CPU (freesasa via PRODIGY), JAX (blocked
 and `lax.scan`-fused Shrake–Rupley), and tinygrad (per-shape `TinyJit`
@@ -16,27 +16,19 @@ Experimental JAX modes (single-pass, neighbor-cutoff) remain documented in
 
 ## Installation
 
-End-user install from PyPI — the core deps already cover CPU
-(`prodigy-prot`, `freesasa`), JAX (`jax`, `jaxlib`), tinygrad, and the
-plot stack (`matplotlib`, `pandas`):
-
-```bash
-pip install "protein-affinity-gpu==1.6.9"
-```
-
-Contributor / local dev — clone the repo and sync with
-[uv](https://docs.astral.sh/uv/) for a reproducible environment pinned
-against `uv.lock`:
+The package is currently installed from source. Clone the repo and sync
+with [uv](https://docs.astral.sh/uv/) for a reproducible environment
+pinned against `uv.lock`:
 
 ```bash
 uv sync                # core deps into .venv/, honouring uv.lock
-uv sync --extra dev    # adds pytest, ruff, build (for tests + release)
 uv sync --extra modal  # adds modal for the GPU benchmark entrypoint
 ```
 
-The three dependency files have distinct jobs: `pyproject.toml` declares
-unpinned ranges and is what PyPI publishes, `uv.lock` is the exact
-pinned resolution, and `.venv/` is a local (gitignored) virtualenv `uv`
+The core deps already cover CPU (`prodigy-prot`, `freesasa`), JAX (`jax`,
+`jaxlib`), tinygrad, and the plot stack (`matplotlib`, `pandas`).
+`pyproject.toml` declares unpinned ranges, `uv.lock` is the exact pinned
+resolution, and `.venv/` is a local (gitignored) virtualenv `uv`
 materialises from the lock.
 
 ## CLI
@@ -68,17 +60,8 @@ contact breakdown, NIS breakdown. `--output-json` persists the full
 per-atom result; `--verbose` streams phase timings to stderr.
 
 Benchmarking is deliberately kept out of the installed CLI — the harness
-scripts live in [`benchmarks/`](benchmarks) and are invoked directly:
-
-```bash
-# Default CPU / JAX harness with memory profiling
-.venv/bin/python benchmarks/benchmark.py benchmarks/fixtures --output-dir benchmarks/output
-
-# Multi-backend comparison (cpu + tinygrad + jax), CSV + three-panel figure
-.venv/bin/python benchmarks/compare.py --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
-    --structures-dir benchmarks/downloads/kahraman_2013_t3 \
-    --backends cpu tinygrad-batch tinygrad-single
-```
+scripts live in [`benchmarks/`](benchmarks) and are invoked directly.
+See [Modal Benchmark](#modal-benchmark) below.
 
 ## Python API
 
@@ -111,6 +94,11 @@ from protein_affinity_gpu.sasa_soft import calculate_sasa_batch_scan_soft
 from protein_affinity_gpu.experimental import predict_binding_affinity_tinygrad
 tg_result = predict_binding_affinity_tinygrad(structure, selection="A,B")
 ```
+
+The public surface exported from `protein_affinity_gpu.__init__` is:
+`__version__`, `ContactAnalysis`, `Protein`, `ProdigyResults`,
+`load_complex`, `load_structure`, `predict`, `predict_binding_affinity`,
+`predict_binding_affinity_jax`.
 
 ## Result
 
@@ -182,57 +170,203 @@ the tinygrad block kernel runs at ~0.69 s warm-mean vs ~0.49 s for
 CPU freesasa — within 1.5× of CPU — with Pearson `r > 0.9998` against CPU on
 per-structure SASA totals and `r = 1.000` on ΔG, Kd, NIS and contact metrics.
 
-## CPU vs JAX Dataset Comparison
+## SASA Algorithm — Shrake–Rupley vs Lee–Richards
 
-For the Kahraman 2013 T3 set included in [benchmarks/datasets/kahraman_2013_t3.tsv](benchmarks/datasets/kahraman_2013_t3.tsv), you can fetch the listed structures and run a CPU vs JAX comparison with:
+All three backends implement the **Shrake–Rupley** rolling-probe algorithm
+(1973). For each atom, a fixed set of points is distributed on the
+expanded van der Waals sphere (radius `r_atom + r_probe`, `r_probe = 1.4 Å`
+by default); each point is tested against every neighbouring atom, and
+the accessible area is the fraction of non-occluded points times the
+sphere area. The CPU path delegates to
+[freesasa](https://freesasa.github.io/) through PRODIGY; the JAX and
+tinygrad paths reimplement the same algorithm as a vectorised kernel
+over an `[N_atoms, N_sphere_points]` tensor so it runs on GPU.
 
-```bash
-.venv/bin/python -m pip install -e .
-REQUIRE_GPU=1 bash benchmarks/run_kahraman_compare.sh
-```
+The classical alternative is **Lee–Richards** (1971), which computes the
+exact accessible surface analytically by constructing and clipping arcs
+where the rolling-probe sphere slides across neighbour contacts. For a
+given probe radius the Lee–Richards answer is mathematically exact (no
+sphere-point discretisation error), whereas Shrake–Rupley error scales
+as ~`1/sqrt(N_sphere_points)`. We use Shrake–Rupley anyway because it is
+embarrassingly parallel — the entire computation reduces to elementwise
+distance ops, an occlusion comparison, and a sum over the sphere-point
+axis — which maps cleanly onto `jnp.einsum` / tinygrad `Tensor` ops and
+onto the blocked and fused kernels documented above. Lee–Richards
+requires per-atom branching, 2D arc bookkeeping, and neighbour-graph
+traversal, none of which vectorise well on GPU. At the default
+`--sphere-points 100` the Shrake–Rupley estimate is already within
+Pearson `r = 0.9999` of freesasa's own Shrake–Rupley reference and
+downstream PRODIGY metrics (ΔG, Kd, NIS, contact classes) match to
+`r = 1.000`, so the integration error is well below the noise floor of
+the scoring function.
 
-The script downloads the required PDB files into `benchmarks/downloads/kahraman_2013_t3/` and writes CSV, JSON, and plot artifacts to `benchmarks/output/kahraman_2013_t3/`.
+## Van der Waals Radii
+
+SASA computation uses a NACCESS-style van der Waals radii library
+shipped at [`src/protein_affinity_gpu/data/vdw.radii`](src/protein_affinity_gpu/data/vdw.radii)
+and loaded by `protein_affinity_gpu.utils.residue_library`. The file is a
+plain text per-atom table — per-residue `ATOM <name> <radius> <polar>`
+lines — that can be swapped for any NACCESS-formatted library (e.g. a
+Bondi set, or a user-patched radius for a non-standard residue) by
+editing the file in place before installing, or by overriding
+`residue_library.default_library` at import time.
 
 ## Modal Benchmark
 
-The Colab notebook has also been refactored into:
+The comparison figure below is committed at
+[`benchmarks/output/combined/comparison_figure.png`](benchmarks/output/combined/comparison_figure.png).
+It is the merged output of one local Apple M2 run and one Modal A100-80GB
+run, plotted with `benchmarks/plot_results.py`.
 
-- [benchmarks/sasa_benchmark.py](benchmarks/sasa_benchmark.py) for a normal local Python run
-- [benchmarks/modal_benchmark.py](benchmarks/modal_benchmark.py) for a Modal GPU run
+![Backend comparison on Kahraman 2013 T3](benchmarks/output/combined/comparison_figure.png)
 
-Setup:
+### What was compared
+
+Six SASA backends over the 16-complex Kahraman 2013 T3 manifest
+([`benchmarks/datasets/kahraman_2013_t3.tsv`](benchmarks/datasets/kahraman_2013_t3.tsv)),
+padded N ∈ [2.5k, 12.8k] atom14-atoms:
+
+| Backend | Device | Kernel |
+|---------|--------|--------|
+| `cpu` | M2 CPU | freesasa via PRODIGY |
+| `tinygrad-block` | M2 Metal | per-shape `TinyJit` blocked Shrake–Rupley |
+| `tinygrad-single` | A100-80GB | fully fused `[N, M, N]` kernel |
+| `tinygrad-batch` | A100-80GB | blocked kernel with `block = min(768, N)` |
+| `jax-block` | A100-80GB | blocked Shrake–Rupley |
+| `jax-scan` | A100-80GB | `lax.scan`-fused variant |
+| `jax-single` | A100-80GB | fully fused single-pass kernel |
+
+### Commands
 
 ```bash
-python3 -m pip install -e ".[modal]"
+# Local M2: cpu + tinygrad-batch + tinygrad-single
+.venv/bin/python benchmarks/benchmark.py \
+    --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
+    --structures-dir benchmarks/downloads/kahraman_2013_t3 \
+    --output-dir benchmarks/output/local \
+    --targets cpu tinygrad-batch tinygrad-single
+
+# Remote A100-80GB: jax-single,batch,scan + tinygrad-single,batch
+modal run benchmarks/modal_benchmark.py \
+    --repeats 2 --run-name kahraman-a100 \
+    --targets jax-single,jax-batch,jax-scan,tinygrad-single,tinygrad-batch \
+    --local-output-dir benchmarks/output/gpu
+
+# Merge the two CSVs into one figure (earlier CSVs win on shared columns —
+# passing the GPU file first keeps A100 numbers and fills only CPU-only
+# columns from the local run).
+.venv/bin/python benchmarks/plot_results.py \
+    benchmarks/output/gpu/results.csv \
+    benchmarks/output/local/results.csv \
+    --output-dir benchmarks/output/combined \
+    --figure-name comparison_figure.png
+```
+
+### Observed differences and why
+
+- **All 6 GPU backends agree with CPU to Pearson `r = 0.9999`** on
+  per-structure SASA totals once TF32 is disabled. Without the fix, JAX
+  on A100 drifts per-structure because the Shrake–Rupley kernels use the
+  `dist² = ‖a‖² + ‖b‖² − 2·⟨a,b⟩` identity — a classic catastrophic
+  cancellation trap. TF32's ~10-bit mantissa in `@`/`einsum` flips
+  buried/not-buried sphere-point votes near the threshold. We set
+  `JAX_DEFAULT_MATMUL_PRECISION=highest` in the Modal image
+  ([`benchmarks/modal_benchmark.py`](benchmarks/modal_benchmark.py))
+  and as a module-level `jax.config.update(...)` in
+  [`src/protein_affinity_gpu/af_design.py`](src/protein_affinity_gpu/af_design.py)
+  so the design loss inherits it locally too. Tinygrad-Metal has no TF32
+  path and was already correct.
+
+- **JAX compile caches accumulate across distinct shapes** and pin device
+  scratch, so a 16-structure sweep can OOM on 80 GB even when each
+  individual structure fits. The sweep loop calls
+  `clear_accelerator_caches()` (in
+  [`benchmarks/sasa/sasa_benchmark.py`](benchmarks/sasa/sasa_benchmark.py)),
+  which runs `jax.clear_caches()` + tinygrad `TinyJit` cache drops
+  + `gc.collect()` between structures.
+
+- **Two largest structures still OOM `jax-single`** (N = 12810 and
+  N = 10738 → fused scratch of 66 GB / 46 GB). That is a physics limit of
+  the fused kernel, not a cache issue — use `jax-block` or `jax-scan` for
+  those.
+
+- **tinygrad CUDA needs a real CUDA base image** on Modal. The slim image
+  with pip-only CUDA wheels does not provide the `libcuda.so` /
+  `libnvrtc.so` symlinks that tinygrad's lazy `ctypes` bindings expect,
+  and every call fails with `cuInit` missing. Both Modal scripts build on
+  `nvidia/cuda:12.4.1-runtime-ubuntu22.04` with `add_python="3.11"`.
+
+### Setup
+
+```bash
+uv sync --extra modal
 modal setup
 ```
 
-The Modal image is GPU-only: it installs `biopython`, `numpy`, `jax[cuda12]`,
-`tinygrad`, `matplotlib`, and `pandas`, but intentionally skips
-`freesasa` and `prodigy-prot`. Because of that, the Modal entrypoint does
-not support the `cpu` benchmark target.
+### Artifact download
 
-Run the benchmark on Modal:
+If you did not pass `--local-output-dir`, download the volume contents
+with:
 
 ```bash
-# Default GPU is A100-80GB.
-modal run benchmarks/modal_benchmark.py --repeats 2 --run-name kahraman-a100
-
-# Or set MODAL_GPU explicitly if you want to override it.
-MODAL_GPU=A100-80GB modal run benchmarks/modal_benchmark.py --repeats 2 --run-name kahraman-a100
-
-# Optional quick smoke run over just the first 10 manifest rows.
-modal run benchmarks/modal_benchmark.py --limit 10 --run-name smoke-10
-
-# Download the output artifacts if you did not pass --local-output-dir.
-modal volume get protein-affinity-gpu-benchmarks runs/kahraman-a100 benchmarks/output/modal-kahraman-a100
+modal volume get protein-affinity-gpu-benchmarks \
+    runs/kahraman-a100 benchmarks/output/modal-kahraman-a100
 ```
 
-If you pass `--local-output-dir benchmarks/output/modal-kahraman-a100`, the Modal entrypoint will also download `benchmark_results.json`, `benchmark_summary.json`, `benchmark_rows.csv`, `benchmark_warm_ms_wide.csv`, and `time_vs_atoms.png` back to your machine after the remote run completes.
+## References
 
-## Development
-
-```bash
-python3 -m pip install -e ".[dev]"
-python3.11 -m pytest
-```
+- **PRODIGY** — Xue, L.C., Rodrigues, J.P., Kastritis, P.L., Bonvin,
+  A.M.J.J., Vangone, A. *PRODIGY: a web server for predicting the binding
+  affinity of protein-protein complexes.* Bioinformatics 32(23), 3676–3678
+  (2016). <https://doi.org/10.1093/bioinformatics/btw514>. The IC-NIS
+  scoring model and the (aliphatic/charged/polar) × contact-class scheme
+  implemented in `protein_affinity_gpu.scoring` / `.contacts` follow this
+  paper.
+- **freesasa** — Mitternacht, S. *FreeSASA: An open source C library for
+  solvent accessible surface area calculations.* F1000Research 5:189
+  (2016). <https://doi.org/10.12688/f1000research.7931.1>. The CPU
+  backend calls freesasa through PRODIGY and is the per-atom SASA
+  ground truth the JAX / tinygrad kernels are validated against
+  (`r = 0.9999` on the Kahraman 2013 T3 set).
+- **Shrake–Rupley algorithm** — Shrake, A., Rupley, J.A. *Environment
+  and exposure to solvent of protein atoms. Lysozyme and insulin.*
+  J. Mol. Biol. 79(2), 351–371 (1973).
+  <https://doi.org/10.1016/0022-2836(73)90011-9>. Rolling-probe
+  sphere-point integration — the algorithm implemented in
+  `protein_affinity_gpu.sasa`.
+- **Lee–Richards algorithm (alternative, analytical)** — Lee, B.,
+  Richards, F.M. *The interpretation of protein structures: Estimation
+  of static accessibility.* J. Mol. Biol. 55(3), 379–400 (1971).
+  <https://doi.org/10.1016/0022-2836(71)90324-X>. Exact arc-clipping
+  analytical SASA. Not used here because the per-atom arc bookkeeping
+  is hard to vectorise on GPU; listed for completeness as the classical
+  alternative.
+- **AlphaFold2** — Jumper, J. et al. *Highly accurate protein structure
+  prediction with AlphaFold.* Nature 596, 583–589 (2021).
+  <https://doi.org/10.1038/s41586-021-03819-2>. The `atom14` padded
+  representation used throughout the JAX / tinygrad kernels and the
+  AFDesign integration in `protein_affinity_gpu.af_design` follow the
+  AlphaFold2 residue layout.
+- **NACCESS / Van der Waals radii** — Hubbard, S.J., Thornton, J.M.
+  *NACCESS (computer program).* Department of Biochemistry and Molecular
+  Biology, University College London (1993). The radii file at
+  [`src/protein_affinity_gpu/data/vdw.radii`](src/protein_affinity_gpu/data/vdw.radii)
+  uses the NACCESS standard residue library format; earlier source for
+  the numerical values: Bondi, A. *van der Waals Volumes and Radii.*
+  J. Phys. Chem. 68(3), 441–451 (1964).
+  <https://doi.org/10.1021/j100785a001>.
+- **Fibonacci / golden-spiral sphere** — Swinbank, R., Purser, R.J.
+  *Fibonacci grids: A novel approach to global modelling.* Quarterly
+  Journal of the Royal Meteorological Society 132, 1769–1793 (2006).
+  <https://doi.org/10.1256/qj.05.227>. The quasi-uniform sphere-point
+  generator in `protein_affinity_gpu.sasa.generate_sphere_points` uses
+  the midpoint Fibonacci spacing to match freesasa's
+  `sasa_sr.c::test_points()`.
+- **Thomson-sphere / exact uniform sphere (alternative)** —
+  Ribeiro-Filho, N. et al. *dr_sasa: Accurate algorithms for deriving
+  surface areas and contacts in biomolecular assemblies.* J. Comp. Chem.
+  (2019). <https://doi.org/10.1002/jcc.26049>. `dr_sasa` uses an exact
+  Thomson-sphere (electrostatic-equilibrium) point set rather than the
+  Fibonacci spiral; this is the more uniform alternative and a candidate
+  swap-in for `generate_sphere_points` if per-atom sphere uniformity
+  matters more than closed-form generation speed.

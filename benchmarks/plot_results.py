@@ -199,7 +199,7 @@ def plot_figure(
             dtype=float,
         )
         label = _display_name(name)
-        if colds.size:
+        if colds.size and name != "cpu":
             label += f"  (compile {np.median(colds):.2f}s)"
         color = _BACKEND_COLORS.get(name)
         if np.any(np.isfinite(stds)):

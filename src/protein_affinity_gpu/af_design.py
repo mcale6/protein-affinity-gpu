@@ -4,6 +4,8 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
+jax.config.update("jax_default_matmul_precision", "highest")
+
 from .contacts import analyze_contacts, calculate_residue_contacts
 from .contacts_soft import calculate_residue_contacts_soft
 from .sasa import generate_sphere_points
@@ -136,6 +138,7 @@ def add_ba_val_loss(
             block_size=block_size,
             sphere_points=sphere_points_array,
             beta=soft_sasa_beta,
+            checkpoint_body=True,
         )
         relative_sasa = calculate_relative_sasa(
             complex_sasa=complex_sasa,
