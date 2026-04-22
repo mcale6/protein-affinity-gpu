@@ -205,20 +205,28 @@ python3 -m pip install -e ".[modal]"
 modal setup
 ```
 
+The Modal image is GPU-only: it installs `biopython`, `numpy`, `jax[cuda12]`,
+`tinygrad`, `matplotlib`, and `pandas`, but intentionally skips
+`freesasa` and `prodigy-prot`. Because of that, the Modal entrypoint does
+not support the `cpu` benchmark target.
+
 Run the benchmark on Modal:
 
 ```bash
-# Pick a GPU type with MODAL_GPU if you want something other than the default L4.
-MODAL_GPU=L4 modal run benchmarks/modal_benchmark.py --repeats 2 --run-name kahraman-l4
+# Default GPU is A100-80GB.
+modal run benchmarks/modal_benchmark.py --repeats 2 --run-name kahraman-a100
+
+# Or set MODAL_GPU explicitly if you want to override it.
+MODAL_GPU=A100-80GB modal run benchmarks/modal_benchmark.py --repeats 2 --run-name kahraman-a100
 
 # Optional quick smoke run over just the first 10 manifest rows.
-MODAL_GPU=L4 modal run benchmarks/modal_benchmark.py --limit 10 --run-name smoke-10
+modal run benchmarks/modal_benchmark.py --limit 10 --run-name smoke-10
 
 # Download the output artifacts if you did not pass --local-output-dir.
-modal volume get protein-affinity-gpu-benchmarks runs/kahraman-l4 benchmarks/output/modal-kahraman-l4
+modal volume get protein-affinity-gpu-benchmarks runs/kahraman-a100 benchmarks/output/modal-kahraman-a100
 ```
 
-If you pass `--local-output-dir benchmarks/output/modal-kahraman-l4`, the Modal entrypoint will also download `benchmark_results.json`, `benchmark_summary.json`, `benchmark_rows.csv`, `benchmark_warm_ms_wide.csv`, and `time_vs_atoms.png` back to your machine after the remote run completes.
+If you pass `--local-output-dir benchmarks/output/modal-kahraman-a100`, the Modal entrypoint will also download `benchmark_results.json`, `benchmark_summary.json`, `benchmark_rows.csv`, `benchmark_warm_ms_wide.csv`, and `time_vs_atoms.png` back to your machine after the remote run completes.
 
 ## Development
 

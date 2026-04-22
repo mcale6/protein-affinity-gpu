@@ -24,6 +24,7 @@ license = { file = "LICENSE" }
 
 [project.optional-dependencies]
 dev = ["build", "pytest>=8.0", "ruff>=0.6"]
+modal = ["modal"]
 
 [project.scripts]
 protein-affinity-predict = "protein_affinity_gpu.cli.predict:main"

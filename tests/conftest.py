@@ -1,9 +1,7 @@
-import sys
-from pathlib import Path
+import os
 
 
-ROOT = Path(__file__).resolve().parents[1]
-SRC = ROOT / "src"
-
-if str(SRC) not in sys.path:
-    sys.path.insert(0, str(SRC))
+# tinygrad expects DEBUG to be an integer. Some local shells export
+# DEBUG=release, which breaks module import during test collection.
+if not os.environ.get("DEBUG", "0").isdigit():
+    os.environ["DEBUG"] = "0"
