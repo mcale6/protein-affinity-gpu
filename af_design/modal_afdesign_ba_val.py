@@ -188,8 +188,14 @@ def run_afdesign_binder(
 ) -> dict[str, object]:
     logging.basicConfig(level=logging.INFO, format="[%(name)s] %(message)s", force=True)
 
+    import jax.numpy as jnp
     from colabdesign import clear_mem, mk_afdesign_model
     from protein_affinity_gpu.af_design import add_ba_val_loss
+    from protein_affinity_gpu.sasa import (
+        calculate_sasa_batch_scan,
+        generate_sphere_points,
+    )
+    from protein_affinity_gpu.utils import residue_constants
 
     binder_seq_mode = _normalize_choice(
         "binder_seq_mode",
@@ -257,20 +263,71 @@ def run_afdesign_binder(
 
     binder_len_effective = int(getattr(af_model, "_binder_len", binder_len))
     binder_ca_history: list[list[list[float]]] = []
+    bsa_history: list[float] = []
 
-    def _capture_binder_ca(model) -> None:
+    # Element-based VdW radii for each of the 37 atom_types. Matches the
+    # element fallback in ``ResidueLibrary.get_radius``; residue-specific
+    # refinements in vdw.radii are sub-Å² on BSA and not worth the aatype
+    # plumbing for a logging-only metric.
+    _element_radii_tbl = {"N": 1.55, "C": 1.70, "O": 1.52, "S": 1.80}
+    _atom_radii_37 = _np.array(
+        [_element_radii_tbl[name[0]] for name in residue_constants.atom_types],
+        dtype=_np.float32,
+    )
+    _sphere_points_jnp = jnp.asarray(
+        generate_sphere_points(sphere_points), dtype=jnp.float32
+    )
+
+    def _capture_design_state(model) -> None:
         atom_positions = model.aux.get("atom_positions")
-        if atom_positions is None:
+        atom_mask = model.aux.get("atom_mask")
+        if atom_positions is None or atom_mask is None:
             return
-        atoms = _np.asarray(atom_positions)
+
+        atoms = _np.asarray(atom_positions)                 # [total_len, 37, 3]
+        atom_mask_np = _np.asarray(atom_mask).astype(_np.float32)  # [total_len, 37]
+
         # AlphaFold's 37-atom-type layout puts CA at index 1.
         binder_ca = atoms[-binder_len_effective:, 1, :].tolist()
         binder_ca_history.append(binder_ca)
 
+        total_len = atoms.shape[0]
+        target_len = total_len - binder_len_effective
+        n_atom_types = residue_constants.atom_type_num
+
+        pos_flat = jnp.asarray(atoms.reshape(-1, 3), dtype=jnp.float32)
+        radii_flat = jnp.asarray(
+            _np.tile(_atom_radii_37, total_len), dtype=jnp.float32
+        )
+        mask_complex = jnp.asarray(atom_mask_np.reshape(-1), dtype=jnp.float32)
+
+        target_residue_slot = _np.zeros(total_len, dtype=_np.float32)
+        target_residue_slot[:target_len] = 1.0
+        target_atom_slot = jnp.asarray(
+            _np.repeat(target_residue_slot, n_atom_types)
+        )
+        mask_target_only = mask_complex * target_atom_slot
+        mask_binder_only = mask_complex * (1.0 - target_atom_slot)
+
+        block_size = max(1, min(int(pos_flat.shape[0]), 768))
+        sasa_complex = calculate_sasa_batch_scan(
+            pos_flat, radii_flat, mask_complex, block_size, _sphere_points_jnp
+        )
+        sasa_target = calculate_sasa_batch_scan(
+            pos_flat, radii_flat, mask_target_only, block_size, _sphere_points_jnp
+        )
+        sasa_binder = calculate_sasa_batch_scan(
+            pos_flat, radii_flat, mask_binder_only, block_size, _sphere_points_jnp
+        )
+        bsa = float(
+            sasa_target.sum() + sasa_binder.sum() - sasa_complex.sum()
+        )
+        bsa_history.append(bsa)
+
     if design_mode == "soft":
-        af_model.design_soft(num_steps, temp=design_temp, callback=_capture_binder_ca)
+        af_model.design_soft(num_steps, temp=design_temp, callback=_capture_design_state)
     else:
-        af_model.design_logits(num_steps, callback=_capture_binder_ca)
+        af_model.design_logits(num_steps, callback=_capture_design_state)
 
     best_aux = af_model._tmp["best"].get("aux", af_model.aux)
     best_seq = af_model.get_seqs(get_best=True)
@@ -291,6 +348,9 @@ def run_afdesign_binder(
 
     binder_ca_path = output_dir / "binder_ca_history.json"
     binder_ca_path.write_text(json.dumps(binder_ca_history))
+
+    bsa_history_path = output_dir / "bsa_history.json"
+    bsa_history_path.write_text(json.dumps(bsa_history))
 
     summary = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -332,6 +392,7 @@ def run_afdesign_binder(
             "trajectory_json": _volume_relative(trajectory_path),
             "best_sequences_json": _volume_relative(sequences_path),
             "binder_ca_history_json": _volume_relative(binder_ca_path),
+            "bsa_history_json": _volume_relative(bsa_history_path),
         },
     }
 

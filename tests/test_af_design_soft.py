@@ -122,7 +122,7 @@ def test_sasa_experimental_reexports_stable_soft_kernel():
 
 
 def test_modal_afdesign_script_imports_stable_helper():
-    source = Path("benchmarks/modal_afdesign_ba_val.py").read_text()
+    source = Path("af_design/modal_afdesign_ba_val.py").read_text()
     assert "from protein_affinity_gpu.af_design import add_ba_val_loss" in source
     assert "def add_ba_val_loss(" not in source
 

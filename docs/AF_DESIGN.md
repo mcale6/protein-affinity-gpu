@@ -242,6 +242,23 @@ For AfDesign-style `ba_val` optimization, the recommended default is:
 That gives the cleanest differentiable path while keeping the underlying
 PRODIGY-style score structure intact.
 
+### Diagnostic: buried surface area (BSA)
+
+Alongside the loss-side metrics, `af_design/modal_afdesign_ba_val.py`
+logs per-iteration buried surface area to `bsa_history.json`:
+
+```text
+BSA = SASA(target_alone) + SASA(binder_alone) − SASA(complex)
+```
+
+This runs in a post-step callback using the **hard** SASA kernel
+(`calculate_sasa_batch_scan`) on `aux["atom_positions"]`, so it adds
+zero backprop cost and does not alter the loss. BSA is a direct
+interface-formation readout — a converging trajectory should trend
+upward into the ~200–1500 Å² range typical of natural protein-protein
+interfaces. Plot it with `af_design/plot_afdesign_traj.py --metric bsa`
+(or `--metric both` for the RMSD + BSA two-panel).
+
 ## TODO
 
 ### Isolate initialization from optimizer in "soft vs hard" comparisons
@@ -271,7 +288,9 @@ the optimizer and the contact/NIS softness, not a clean hard/soft SASA split.
 Two follow-ups worth doing:
 
 1. Expose a `use_soft_sasa` toggle in `add_ba_val_loss(...)` and wire it up in
-   the Modal entrypoint, so a true hard-SASA baseline is reachable.
+   the Modal entrypoint, so a true hard-SASA baseline is reachable. BSA is
+   already logged independently via the post-step callback and does not
+   depend on this toggle.
 2. Consider varying the `restart(mode=...)` initialization to match the design
    mode (e.g. a pure-gumbel or one-hot init for `design_logits` runs) if we
    want to isolate "optimizer shape" from "init shape".

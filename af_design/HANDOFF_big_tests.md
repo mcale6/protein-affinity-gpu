@@ -11,9 +11,10 @@ the RMSD plot, and write up the deliverables.
   Cα coordinates every iteration via a ColabDesign design callback and
   serialises them to `binder_ca_history.json` alongside the usual
   ColabDesign artifacts.
-- `af_design/plot_afdesign_rmsd.py` — reads two
-  `binder_ca_history.json` files, computes per-iteration backbone RMSD
-  (Kabsch superposition) against the final frame, and writes a PNG.
+- `af_design/plot_afdesign_traj.py` — reads per-run
+  `binder_ca_history.json` + `bsa_history.json`, computes per-iteration
+  backbone RMSD (Kabsch superposition) against the final frame and BSA,
+  and writes a one- or two-panel PNG (`--metric rmsd|bsa|both`).
 - `src/protein_affinity_gpu/af_design.py` — calls
   `calculate_sasa_batch_scan_soft(..., checkpoint_body=True)` so the
   SASA scan is wrapped in `jax.checkpoint`. That was needed to survive
@@ -84,20 +85,25 @@ Important flag caveats:
   constant `VALID_DESIGN_MODES` enforces this.
 - `--binder-seq-mode` accepts only `soft` or `pseudo`.
 
-### 3. RMSD plot
+### 3. Trajectory plot (RMSD + BSA)
 
 ```bash
-uv run python af_design/plot_afdesign_rmsd.py \
-  --soft benchmarks/output/af-soft/binder_ca_history.json \
-  --hardish benchmarks/output/af-hardish/binder_ca_history.json \
-  --output benchmarks/output/af_rmsd.png
+uv run python af_design/plot_afdesign_traj.py \
+  --soft-dir benchmarks/output/af-soft \
+  --hardish-dir benchmarks/output/af-hardish \
+  --output benchmarks/output/af_traj.png \
+  --metric both
 ```
 
-Default compares each run against **its own final frame**. Add
-`--reference soft-last` if you'd rather compare both curves against
-the soft run's final frame (more apples-to-apples between the two
-optimization trajectories, at the cost of making the soft curve
-monotonically decrease to zero by construction).
+`--metric both` (default) writes a two-panel PNG with Cα RMSD on top
+and BSA on the bottom. Drop to `--metric rmsd` or `--metric bsa` for a
+single-panel figure.
+
+For RMSD, the default reference is each run's own final frame. Add
+`--reference soft-last` to compare both curves against the soft run's
+final frame (more apples-to-apples between the two optimization
+trajectories, at the cost of making the soft curve monotonically
+decrease to zero by construction).
 
 ## Deliverables
 
