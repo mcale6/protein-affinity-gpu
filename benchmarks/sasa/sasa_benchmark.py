@@ -3,7 +3,7 @@
 
 Exports the backend registry, the per-structure/per-backend runner, manifest
 loading / RCSB download, atom14 counting, and the single ``run_benchmark``
-function that both ``benchmarks/benchmark.py`` (local M2) and
+function that both ``benchmarks/benchmark.py`` (local M1 Max) and
 ``benchmarks/modal_benchmark.py`` (GPU) delegate to.
 
 Result schema (one row per structure, columns namespaced by backend):

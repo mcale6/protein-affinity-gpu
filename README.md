@@ -215,7 +215,7 @@ editing the file in place before installing, or by overriding
 
 The comparison figure below is committed at
 [`docs/assets/comparison_figure.png`](docs/assets/comparison_figure.png).
-It is the merged output of one local Apple M2 run and one Modal A100-80GB
+It is the merged output of one local Apple M1 Max run and one Modal A100-80GB
 run, plotted with `benchmarks/plot_results.py` (which writes into the
 gitignored `benchmarks/output/combined/` and is copied into
 `docs/assets/` for the README).
@@ -230,8 +230,8 @@ padded N ∈ [2.5k, 12.8k] atom14-atoms:
 
 | Backend | Device | Kernel |
 |---------|--------|--------|
-| `cpu` | M2 CPU | freesasa via PRODIGY |
-| `tinygrad-block` | M2 Metal | per-shape `TinyJit` blocked Shrake–Rupley |
+| `cpu` | M1 Max CPU | freesasa via PRODIGY |
+| `tinygrad-block` | M1 Max Metal | per-shape `TinyJit` blocked Shrake–Rupley |
 | `tinygrad-single` | A100-80GB | fully fused `[N, M, N]` kernel |
 | `tinygrad-batch` | A100-80GB | blocked kernel with `block = min(768, N)` |
 | `jax-block` | A100-80GB | blocked Shrake–Rupley |
@@ -241,7 +241,7 @@ padded N ∈ [2.5k, 12.8k] atom14-atoms:
 ### Commands
 
 ```bash
-# Local M2: cpu + tinygrad-batch + tinygrad-single
+# Local M1 Max: cpu + tinygrad-batch + tinygrad-single
 .venv/bin/python benchmarks/benchmark.py \
     --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
     --structures-dir benchmarks/downloads/kahraman_2013_t3 \

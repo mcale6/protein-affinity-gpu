@@ -47,7 +47,7 @@ Stable differentiable AFDesign helpers live in
 | Logging helpers | [src/protein_affinity_gpu/utils/logging_utils.py](../src/protein_affinity_gpu/utils/logging_utils.py) |
 | Structure loader | [src/protein_affinity_gpu/utils/structure.py](../src/protein_affinity_gpu/utils/structure.py) |
 | CLI — predict | [src/protein_affinity_gpu/cli/predict.py](../src/protein_affinity_gpu/cli/predict.py) |
-| Local benchmark harness (M2 / CPU) | [benchmarks/benchmark.py](../benchmarks/benchmark.py) |
+| Local benchmark harness (M1 Max / CPU) | [benchmarks/benchmark.py](../benchmarks/benchmark.py) |
 | Modal GPU benchmark harness | [benchmarks/modal_benchmark.py](../benchmarks/modal_benchmark.py) |
 | Benchmark plot merger | [benchmarks/plot_results.py](../benchmarks/plot_results.py) |
 | Shared benchmark helpers | [benchmarks/sasa/sasa_benchmark.py](../benchmarks/sasa/sasa_benchmark.py) |
@@ -66,7 +66,7 @@ protein-affinity-gpu/
 ├── LICENSE
 ├── update_pkg.sh              # Bump version + build sdist/wheel
 ├── benchmarks/
-│   ├── benchmark.py              # Local harness (Apple M2 / CPU): cpu + tinygrad single/batch
+│   ├── benchmark.py              # Local harness (Apple M1 Max / CPU): cpu + tinygrad single/batch
 │   ├── modal_benchmark.py        # Modal GPU harness: jax single/batch/scan + tinygrad single/batch
 │   ├── plot_results.py           # Merge N results.csv files + render 3-panel comparison figure
 │   ├── sasa/
@@ -332,7 +332,7 @@ cover the `(local CPU)` + `(remote GPU)` split, and a third merges both
 outputs into a single figure:
 
 ```bash
-# Local — Apple M2 / any CPU box. cpu needs prodigy-prot + freesasa.
+# Local — Apple M1 Max / any CPU box. cpu needs prodigy-prot + freesasa.
 python benchmarks/benchmark.py \
     --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
     --structures-dir benchmarks/downloads/kahraman_2013_t3 \

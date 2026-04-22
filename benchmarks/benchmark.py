@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local benchmark harness (Apple M2 / CPU box).
+"""Local benchmark harness (Apple M1 Max / CPU box).
 
 Runs the CPU and tinygrad targets (``cpu``, ``tinygrad-single``,
 ``tinygrad-batch``) over a Kahraman-style manifest and writes the unified
