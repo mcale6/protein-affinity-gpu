@@ -15,6 +15,7 @@ from tinygrad import Device, Tensor
 from ..contacts import calculate_residue_contacts_tinygrad
 from ..sasa import calculate_sasa_batch_tinygrad, generate_sphere_points
 from ..sasa_experimental import (
+    calculate_sasa_batch_tinygrad_bucketed,
     calculate_sasa_tinygrad,
     calculate_sasa_tinygrad_neighbor,
 )
@@ -23,7 +24,7 @@ from ..utils._array import Array
 from ..utils.residue_classification import ResidueClassification
 from ..utils.residue_library import default_library as residue_library
 
-TinygradSasaMode = Literal["block", "single", "neighbor"]
+TinygradSasaMode = Literal["block", "single", "neighbor", "bucketed"]
 _ACCELERATOR_DEVICES = {"METAL", "CUDA", "GPU"}
 
 
@@ -40,6 +41,11 @@ class TinygradAdapter:
       the K nearest atoms per row, shrinking the buried-check scratch
       from ``[N, M, N]`` to ``[N, M, K]`` (~80× at K=64). Lossless when
       K covers the worst-case occlusion neighbor count.
+    - ``"bucketed"`` — same blocked kernel as ``"block"`` but pads ``N``
+      up to the next multiple of ``bucket_step`` before dispatch. The
+      TinyJit cache keys on the bucketed shape, so across a batch of
+      similarly-sized structures one compile services many inputs (the
+      compile storm, not arithmetic, is the dominant cost on Apple Metal).
     """
 
     def __init__(
@@ -47,9 +53,11 @@ class TinygradAdapter:
         *,
         mode: TinygradSasaMode = "block",
         k_neighbors: int = 64,
+        bucket_step: int = 2048,
     ) -> None:
         self._mode = mode
         self._k_neighbors = k_neighbors
+        self._bucket_step = bucket_step
 
     @property
     def name(self) -> str:
@@ -146,4 +154,8 @@ class TinygradAdapter:
             return calculate_sasa_tinygrad_neighbor(**common, k_neighbors=self._k_neighbors)
         if self._mode == "single" or block_size is None:
             return calculate_sasa_tinygrad(**common)
+        if self._mode == "bucketed":
+            return calculate_sasa_batch_tinygrad_bucketed(
+                **common, block_size=block_size, bucket_step=self._bucket_step,
+            )
         return calculate_sasa_batch_tinygrad(**common, block_size=block_size)

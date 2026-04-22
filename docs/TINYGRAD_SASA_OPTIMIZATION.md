@@ -399,3 +399,124 @@ On a GPU host comparing `jax-single` vs `jax-neighbor` the
 `jax_peak_mb` line quantifies the ~80× scratch reduction directly; on CPU
 hosts only `rss_mb` shows, which is still enough to spot the
 `jax-single` `[N, M, N]` blowup.
+
+---
+
+## 8. Bucketed-padding mode (`mode="bucketed"`)
+
+The Kahraman sweep on Apple Metal spends most of its wall time compiling
+TinyJit kernels, not running them. Per-shape caches key on `(block, N, M)`,
+and atom14 compaction gives each complex its own `N` — so a 16-structure
+sweep pays 16 cold compiles even though the *arithmetic* per block is
+already cheap (see §2/§4 fixes; each block is sub-second warm). The
+same story holds on XLA: different `N` means a fresh compile.
+
+**Idea:** round every structure's `N` up to the next multiple of
+`bucket_step` (default `2048`) *before* dispatching the kernel. The
+Kahraman T3 atom14 counts `N ∈ [2.5k, 12.8k]` collapse to ~6 distinct
+buckets at step=2048, so the whole sweep shares ~6 compiles instead of 16.
+The bottleneck being attacked is compile storm, not arithmetic.
+
+### Padding safety
+
+Padded atoms are appended with `mask=0, coords=0, vdw_radii=0`.
+`_precompute_sasa_inputs` multiplies coords by mask, so `masked_coords = 0`
+and `radii_with_probe = probe_radius` for padded rows (non-zero, but the
+outputs never leak back):
+
+- **Real-atom output unchanged.** A real atom's buried check is
+  `dist² ≤ (r_j + probe)²` against every atom j. For a padded j:
+  `|scaled_point_i − 0|² = |scaled_point_i|² > 0`, and
+  `(0 + probe)² = probe² ≈ 1.96`. The padded row only masks a real sphere
+  point if that sphere point sits within `probe` Å of the origin — which
+  doesn't happen for any real atom off-origin. For realistic protein
+  coordinates (translated so the centroid is nowhere near the origin
+  after `_precompute_sasa_inputs`) this is bit-exact; worst case an atom
+  literally at the origin would see spurious occlusion, which doesn't
+  occur in practice.
+- **Padded-atom output zeroed.** Padded atoms have `radii_probe_sq = probe²`
+  but `vdw_radii = 0`, so `areas = 4π · probe²` is non-zero — however the
+  final slice `out_padded[:n_orig]` discards all padded rows before
+  return, so whatever they computed is irrelevant.
+
+Verified on 1A2K with `bucket_step=1024`: `max|Δ|` vs the unbucketed
+blocked kernel is **0.0** (bit-identical).
+
+### Wrappers
+
+```python
+# src/protein_affinity_gpu/sasa_experimental.py
+def bucket_padded_size(n: int, step: int) -> int:
+    """Round n up to next multiple of step; step<=1 is a no-op."""
+    if step <= 1 or n <= 0:
+        return n
+    return ((n + step - 1) // step) * step
+
+def calculate_sasa_batch_tinygrad_bucketed(coords, vdw_radii, mask,
+                                           sphere_points, block_size,
+                                           probe_radius=1.4, bucket_step=2048):
+    n_orig = int(coords.shape[0])
+    n_padded = bucket_padded_size(n_orig, bucket_step)
+    if n_padded == n_orig:
+        return calculate_sasa_batch_tinygrad(coords, vdw_radii, mask,
+                                             sphere_points, block_size, probe_radius)
+    coords_p, vdw_p, mask_p = _pad_tinygrad_inputs(
+        coords, vdw_radii, mask, n_padded - n_orig,
+    )
+    out_padded = calculate_sasa_batch_tinygrad(
+        coords_p, vdw_p, mask_p, sphere_points, block_size, probe_radius,
+    )
+    return out_padded[:n_orig].contiguous().realize()
+```
+
+The JAX analog (`calculate_sasa_batch_bucketed`) lives in the same module
+and does the same thing on `jnp.concatenate`-padded inputs — the XLA
+compile cache keys on padded `N` too, so the same amortization applies
+to the JAX block path.
+
+### API
+
+Exposed through `predict_binding_affinity_tinygrad` and `TinygradAdapter`:
+
+```python
+from protein_affinity_gpu.experimental import predict_binding_affinity_tinygrad
+
+res = predict_binding_affinity_tinygrad(
+    "benchmarks/fixtures/1A2K.pdb",
+    selection="A,B",
+    mode="bucketed",        # new mode, alongside "block" / "single" / "neighbor"
+    bucket_step=2048,       # one compile per distinct ceil(N / step) * step
+)
+```
+
+### Cache-reuse evidence
+
+Smoke run on three consecutive structures with atom14 counts
+`N ∈ {5054, 5544, 4368}`, all padding to bucket `6144`:
+
+```
+tinygrad.sasa.bucketed: N=5054 → 6144 (step=2048, +1090 padded atoms)
+tinygrad.sasa.block: compiling new TinyJit for block=768 N=6144 M=100   ← cold 1.15s
+tinygrad.sasa.bucketed: N=5544 → 6144 (step=2048, +600 padded atoms)
+tinygrad.sasa.block: TinyJit cache hit block=768 N=6144 M=100           ← warm 0.79s
+tinygrad.sasa.bucketed: N=4368 → 6144 (step=2048, +1776 padded atoms)
+tinygrad.sasa.block: TinyJit cache hit block=768 N=6144 M=100           ← warm 0.80s
+```
+
+One compile, three uses — exactly the behaviour the per-shape cache was
+designed to support but never got across distinct-`N` inputs before.
+
+### Known tension with `clear_tinygrad_caches()`
+
+The benchmark harness in `benchmarks/sasa/sasa_benchmark.py` clears the
+`_sasa_block_jit_cache` after each structure to mitigate Metal
+`Internal Error (0000000e)` (see §5 footnote). That mitigation directly
+defeats the bucketed amortization — every structure becomes a cold
+compile again. `tinygrad-bucketed` is therefore **not** wired into the
+`BACKENDS` registry as a default target yet; the mode is available via
+`predict_binding_affinity_tinygrad(mode="bucketed")` for programmatic
+use, and via `benchmarks/sasa/profile_sasa.py` which does the
+cache-keying demo on a single structure. Exposing it as a registry
+backend needs the cache-clear policy to be per-target (clear only for
+non-bucketed tinygrad modes) — a follow-up once the memory-pressure
+tradeoff is characterised on a full sweep.

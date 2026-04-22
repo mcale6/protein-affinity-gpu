@@ -72,8 +72,9 @@ def predict_binding_affinity_tinygrad(
     save_results: bool = False,
     output_dir: Optional[str | Path] = ".",
     quiet: bool = True,
-    mode: Literal["block", "single", "neighbor"] = "block",
+    mode: Literal["block", "single", "neighbor", "bucketed"] = "block",
     k_neighbors: int = 64,
+    bucket_step: int = 2048,
 ) -> ProdigyResults:
     """Run the PRODIGY IC-NIS pipeline on tinygrad (experimental surface).
 
@@ -81,12 +82,15 @@ def predict_binding_affinity_tinygrad(
     blocked TinyJit kernel, ``"single"`` is the fully-fused kernel,
     ``"neighbor"`` keeps only the K nearest atoms per row via
     ``Tensor.topk`` — ~80× scratch reduction at K=64, lossless when
-    K covers the worst-case occlusion neighbor count.
+    K covers the worst-case occlusion neighbor count. ``"bucketed"`` pads
+    ``N`` up to the next multiple of ``bucket_step`` before dispatch so
+    the TinyJit cache is keyed on a handful of shapes — one compile
+    amortises across many structures instead of per-structure compiles.
     """
     from .backends._tinygrad import TinygradAdapter
 
     return _run_pipeline(
-        TinygradAdapter(mode=mode, k_neighbors=k_neighbors),
+        TinygradAdapter(mode=mode, k_neighbors=k_neighbors, bucket_step=bucket_step),
         struct_path=struct_path,
         selection=selection,
         distance_cutoff=distance_cutoff,

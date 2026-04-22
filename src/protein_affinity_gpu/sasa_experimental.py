@@ -1,5 +1,5 @@
-"""Experimental SASA kernels — soft/differentiable, neighbor-cutoff, and the
-fully-fused single-pass tinygrad kernel.
+"""Experimental SASA kernels — soft/differentiable, neighbor-cutoff, the
+fully-fused single-pass tinygrad kernel, and bucketed-padding wrappers.
 
 The default path is :func:`.sasa.calculate_sasa_batch` /
 :func:`.sasa.calculate_sasa_batch_scan`. The non-differentiable single-pass
@@ -14,6 +14,7 @@ from functools import partial
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from jax import jit
 from tinygrad import Tensor as _TGTensor
 from tinygrad import TinyJit as _TGTinyJit
@@ -26,6 +27,8 @@ from .sasa import (
     _log_device_memory,
     _log_single_pass_scratch,
     _precompute_sasa_inputs,
+    calculate_sasa_batch,
+    calculate_sasa_batch_tinygrad,
 )
 
 
@@ -425,9 +428,140 @@ def calculate_sasa_tinygrad_neighbor(
     return out
 
 
+# --- Bucketed-padding wrappers -----------------------------------------
+#
+# The per-shape JIT caches (both tinygrad TinyJit and JAX XLA) recompile on
+# every distinct ``N``. With atom14 structures each complex has a unique
+# padded count, so every sweep pays ``n_structures`` compile passes. On
+# Apple Metal that compile storm is the dominant cost and also the source of
+# ``Internal Error (0000000e)`` under sustained pressure.
+#
+# Bucketed padding rounds ``N`` up to the next multiple of ``bucket_step``
+# (e.g. 2048) *before* invoking the kernel. Padded atoms carry
+# ``mask=0, coords=0, vdw_radii=0`` — ``_precompute_sasa_inputs`` zeros them
+# out, so they contribute ``area=0`` per atom and never register as
+# occluders for real atoms (``scaled_norm2 > 0`` for any real atom not at
+# the origin, so the inner ``dist² <= 0`` buried check fails). Output for
+# real atoms is numerically identical; padded rows are sliced off before
+# return.
+#
+# The JIT cache keys on padded ``N``. Kahraman T3 padded N ∈ [2.5k, 12.8k]
+# collapses to ~5 distinct buckets at step=2048, so one compile serves
+# several structures.
+
+
+def bucket_padded_size(n: int, step: int) -> int:
+    """Round ``n`` up to the next multiple of ``step``; ``step<=1`` is a no-op.
+
+    Callers pass the original atom count and receive the bucketed count.
+    Pair with :func:`calculate_sasa_batch_tinygrad_bucketed` /
+    :func:`calculate_sasa_batch_bucketed` to pad before kernel dispatch.
+    """
+    n = int(n)
+    step = int(step)
+    if step <= 1 or n <= 0:
+        return n
+    return ((n + step - 1) // step) * step
+
+
+def _pad_tinygrad_inputs(
+    coords: "_TGTensor",
+    vdw_radii: "_TGTensor",
+    mask: "_TGTensor",
+    pad_n: int,
+) -> tuple["_TGTensor", "_TGTensor", "_TGTensor"]:
+    """Append ``pad_n`` zero rows to coords ``[N, 3]`` / radii ``[N]`` / mask ``[N]``.
+
+    Padded atoms' ``mask=0`` route through ``_precompute_sasa_inputs`` as
+    zero-coords / zero-radii, so they contribute nothing to real atoms.
+    """
+    coords_pad = _TGTensor(np.zeros((pad_n, 3), dtype=np.float32))
+    radii_pad = _TGTensor(np.zeros(pad_n, dtype=np.float32))
+    mask_pad = _TGTensor(np.zeros(pad_n, dtype=np.float32))
+    return (
+        _TGTensor.cat(coords, coords_pad, dim=0),
+        _TGTensor.cat(vdw_radii, radii_pad, dim=0),
+        _TGTensor.cat(mask, mask_pad, dim=0),
+    )
+
+
+def calculate_sasa_batch_tinygrad_bucketed(
+    coords: "_TGTensor",
+    vdw_radii: "_TGTensor",
+    mask: "_TGTensor",
+    sphere_points: "_TGTensor",
+    block_size: int,
+    probe_radius: float = 1.4,
+    bucket_step: int = 2048,
+) -> "_TGTensor":
+    """Blocked tinygrad SASA with padded-to-bucket ``N`` for JIT cache reuse.
+
+    Pads ``N`` up to the next multiple of ``bucket_step``, dispatches the
+    existing blocked kernel (whose TinyJit cache keys on the bucketed shape),
+    then slices padded tail rows off the result.
+    """
+    n_orig = int(coords.shape[0])
+    n_padded = bucket_padded_size(n_orig, bucket_step)
+    if n_padded == n_orig:
+        LOGGER.info(
+            "tinygrad.sasa.bucketed: N=%d already multiple of step=%d — bypassing padding",
+            n_orig, bucket_step,
+        )
+        return calculate_sasa_batch_tinygrad(
+            coords, vdw_radii, mask, sphere_points, block_size, probe_radius,
+        )
+
+    pad = n_padded - n_orig
+    LOGGER.info(
+        "tinygrad.sasa.bucketed: N=%d → %d (step=%d, +%d padded atoms)",
+        n_orig, n_padded, bucket_step, pad,
+    )
+    coords_p, vdw_p, mask_p = _pad_tinygrad_inputs(coords, vdw_radii, mask, pad)
+    out_padded = calculate_sasa_batch_tinygrad(
+        coords_p, vdw_p, mask_p, sphere_points, block_size, probe_radius,
+    )
+    # Slice the real-atom prefix; realize to detach from the padded buffer so
+    # the caller sees a clean ``[n_orig]`` tensor.
+    return out_padded[:n_orig].contiguous().realize()
+
+
+def calculate_sasa_batch_bucketed(
+    coords: jnp.ndarray,
+    vdw_radii: jnp.ndarray,
+    mask: jnp.ndarray,
+    block_size: int,
+    sphere_points: jnp.ndarray,
+    probe_radius: float = 1.4,
+    bucket_step: int = 2048,
+) -> jnp.ndarray:
+    """JAX blocked SASA with padded-to-bucket ``N`` — analog of the tinygrad path.
+
+    XLA keys its compile cache on shapes too, so this is the same "one compile
+    per bucket" trick but for :func:`.sasa.calculate_sasa_batch`.
+    """
+    n_orig = int(coords.shape[0])
+    n_padded = bucket_padded_size(n_orig, bucket_step)
+    if n_padded == n_orig:
+        return calculate_sasa_batch(coords, vdw_radii, mask, block_size, sphere_points, probe_radius)
+
+    pad = n_padded - n_orig
+    LOGGER.info(
+        "jax.sasa.bucketed: N=%d → %d (step=%d, +%d padded atoms)",
+        n_orig, n_padded, bucket_step, pad,
+    )
+    coords_p = jnp.concatenate([coords, jnp.zeros((pad, 3), dtype=coords.dtype)], axis=0)
+    vdw_p = jnp.concatenate([vdw_radii, jnp.zeros(pad, dtype=vdw_radii.dtype)], axis=0)
+    mask_p = jnp.concatenate([mask, jnp.zeros(pad, dtype=mask.dtype)], axis=0)
+    out_padded = calculate_sasa_batch(coords_p, vdw_p, mask_p, block_size, sphere_points, probe_radius)
+    return out_padded[:n_orig]
+
+
 __all__ = [
+    "bucket_padded_size",
+    "calculate_sasa_batch_bucketed",
     "calculate_sasa_batch_soft",
     "calculate_sasa_batch_scan_soft",
+    "calculate_sasa_batch_tinygrad_bucketed",
     "calculate_sasa_jax_soft",
     "calculate_sasa_jax_neighbor",
     "calculate_sasa_tinygrad",
