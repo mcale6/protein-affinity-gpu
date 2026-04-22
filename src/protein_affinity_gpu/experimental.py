@@ -2,9 +2,11 @@
 
 These wrap :func:`.predict._run_pipeline` with experimental adapters
 (:class:`.backends._jax_experimental.JAXExperimentalAdapter`,
-:class:`.backends._tinygrad.TinygradAdapter`) that reach into
-:mod:`.sasa_experimental`. The default surface in :mod:`.predict` covers
-only JAX block / scan.
+:class:`.backends._tinygrad.TinygradAdapter`). The default surface in
+:mod:`.predict` covers only JAX block / scan. The stable differentiable
+soft-SASA kernels live in :mod:`.sasa_soft`; the experimental surface adds
+the extra single-pass / neighbor modes and exposes the compatibility
+re-exports in :mod:`.sasa_experimental`.
 """
 from __future__ import annotations
 

@@ -1,15 +1,18 @@
 # protein-affinity-gpu — Experimental Surface
 
-> Companion to [INDEX.md](INDEX.md). This document covers everything that
-> lives behind `protein_affinity_gpu.experimental` and
-> `protein_affinity_gpu.sasa_experimental` — kernels and adapters that are
-> not part of the default API contract and may change shape between
-> releases.
+> Companion to [INDEX.md](INDEX.md). This document covers the experimental
+> entry points and kernels that still live behind
+> `protein_affinity_gpu.experimental` and `protein_affinity_gpu.sasa_experimental`.
+> Stable differentiable AFDesign helpers are documented separately in
+> [AF_DESIGN.md](AF_DESIGN.md).
 
-The default surface exposes only two SASA kernels (`calculate_sasa_batch`,
-`calculate_sasa_batch_scan`) wired through `predict_binding_affinity_jax`
-with `mode ∈ {"block", "scan"}`. Everything else — tinygrad, single-pass
-JAX, neighbor-cutoff JAX, differentiable soft-SASA — is parked here.
+The default predictor surface exposes only two SASA kernels
+(`calculate_sasa_batch`, `calculate_sasa_batch_scan`) wired through
+`predict_binding_affinity_jax` with `mode ∈ {"block", "scan"}`. The stable
+differentiable soft-SASA kernels now live in `protein_affinity_gpu.sasa_soft`;
+this document covers the experimental entry points plus the neighbor-cutoff
+and tinygrad kernels, and `sasa_experimental.py` remains a compatibility
+re-export layer for the soft JAX kernels.
 
 ---
 
@@ -91,18 +94,18 @@ adapter = get_adapter("jax-experimental", mode="single", soft_sasa=True, soft_be
 
 ## 3. SASA kernels — `sasa_experimental.py`
 
-All functions below are implemented in
-[`src/protein_affinity_gpu/sasa_experimental.py`](../src/protein_affinity_gpu/sasa_experimental.py).
-They import shared primitives (`_dispatch_blocked_jax`,
-`_dispatch_blocked_jax_scan`, `_iter_blocks`, `_precompute_sasa_inputs`,
-`_log_device_memory`, `LOGGER`) from the default [`sasa.py`](../src/protein_affinity_gpu/sasa.py).
+The neighbor-cutoff JAX kernels, tinygrad kernels, and compatibility re-exports
+live in [`src/protein_affinity_gpu/sasa_experimental.py`](../src/protein_affinity_gpu/sasa_experimental.py).
+The stable differentiable soft JAX kernels themselves live in
+[`src/protein_affinity_gpu/sasa_soft.py`](../src/protein_affinity_gpu/sasa_soft.py).
 
 > The non-differentiable single-pass JAX kernel (`calculate_sasa_jax`) and
 > the blocked tinygrad kernel (`calculate_sasa_batch_tinygrad`) live in the
-> default [`sasa.py`](../src/protein_affinity_gpu/sasa.py) — they are still
-> only plumbed through this experimental surface's adapters, but the
-> implementations are in the main module so the experimental file stays
-> focused on soft/differentiable and neighbor-cutoff variants.
+> default [`sasa.py`](../src/protein_affinity_gpu/sasa.py). The stable soft
+> JAX kernels now live in [`sasa_soft.py`](../src/protein_affinity_gpu/sasa_soft.py)
+> and are re-exported from
+> [`sasa_experimental.py`](../src/protein_affinity_gpu/sasa_experimental.py)
+> for compatibility.
 
 ### 3.1 JAX — differentiable / neighbor
 

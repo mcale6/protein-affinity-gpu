@@ -19,10 +19,14 @@ directly comparable. The JAX backend lives in
 [`predict.py`](../src/protein_affinity_gpu/predict.py), parametrized by a
 [`BackendAdapter`](../src/protein_affinity_gpu/backends/_adapter.py).
 
-Experimental kernels (tinygrad, single-pass / neighbor-cutoff JAX,
-differentiable soft-SASA) and their benchmark harness live behind
-`protein_affinity_gpu.experimental` — see
-[EXPERIMENTAL.md](EXPERIMENTAL.md).
+Stable differentiable AFDesign helpers live in
+[`af_design.py`](../src/protein_affinity_gpu/af_design.py),
+[`contacts_soft.py`](../src/protein_affinity_gpu/contacts_soft.py),
+[`scoring_soft.py`](../src/protein_affinity_gpu/scoring_soft.py), and
+[`sasa_soft.py`](../src/protein_affinity_gpu/sasa_soft.py) — see
+[AF_DESIGN.md](AF_DESIGN.md). Experimental kernels and entry points
+(tinygrad, single-pass / neighbor-cutoff JAX) still live behind
+`protein_affinity_gpu.experimental` — see [EXPERIMENTAL.md](EXPERIMENTAL.md).
 
 ---
 
@@ -34,8 +38,10 @@ differentiable soft-SASA) and their benchmark harness live behind
 | Package metadata | [pyproject.toml](../pyproject.toml) |
 | Python API root | [src/protein_affinity_gpu/__init__.py](../src/protein_affinity_gpu/__init__.py) |
 | Unified predictor | [src/protein_affinity_gpu/predict.py](../src/protein_affinity_gpu/predict.py) |
+| AFDesign helper | [src/protein_affinity_gpu/af_design.py](../src/protein_affinity_gpu/af_design.py) · [docs](AF_DESIGN.md) |
 | CPU predictor | [src/protein_affinity_gpu/cpu.py](../src/protein_affinity_gpu/cpu.py) |
 | Default SASA kernels | [src/protein_affinity_gpu/sasa.py](../src/protein_affinity_gpu/sasa.py) |
+| Stable soft kernels | [src/protein_affinity_gpu/sasa_soft.py](../src/protein_affinity_gpu/sasa_soft.py) |
 | Backend adapters | [src/protein_affinity_gpu/backends/](../src/protein_affinity_gpu/backends/) |
 | Experimental surface | [src/protein_affinity_gpu/experimental.py](../src/protein_affinity_gpu/experimental.py) · [docs](EXPERIMENTAL.md) |
 | Logging helpers | [src/protein_affinity_gpu/utils/logging_utils.py](../src/protein_affinity_gpu/utils/logging_utils.py) |
@@ -68,9 +74,13 @@ protein-affinity-gpu/
 │   ├── experimental.py        # Experimental entry points (tinygrad, jax-experimental)
 │   ├── cpu.py                 # PRODIGY + freesasa CPU pipeline
 │   ├── sasa.py                # Default SASA kernels (JAX block + scan)
-│   ├── sasa_experimental.py   # Experimental SASA kernels (tinygrad, soft, single, neighbor)
+│   ├── sasa_soft.py           # Stable differentiable JAX SASA kernels
+│   ├── sasa_experimental.py   # Experimental SASA kernels + soft compatibility re-exports
 │   ├── contacts.py            # Residue contacts + interaction class counts
+│   ├── contacts_soft.py       # Stable differentiable residue-contact probabilities
 │   ├── scoring.py             # NISCoefficients + backend-agnostic scoring primitives
+│   ├── scoring_soft.py        # Stable differentiable NIS thresholding
+│   ├── af_design.py           # Stable AfDesign / ColabDesign loss helpers
 │   ├── results.py             # ProdigyResults / ContactAnalysis, JSON writer
 │   ├── backends/
 │   │   ├── _adapter.py            # BackendAdapter Protocol
@@ -116,9 +126,18 @@ from protein_affinity_gpu import (
 The JAX entry point is lazy-loaded at first call so importing the package
 doesn't pull JAX into memory.
 
-Tinygrad and the extended JAX modes (single-pass, neighbor-cutoff, soft)
-live on the experimental surface — import them from
-`protein_affinity_gpu.experimental`. See [EXPERIMENTAL.md](EXPERIMENTAL.md).
+Stable soft helpers are importable directly:
+
+```python
+from protein_affinity_gpu.af_design import add_ba_val_loss
+from protein_affinity_gpu.contacts_soft import calculate_residue_contacts_soft
+from protein_affinity_gpu.scoring_soft import calculate_nis_percentages_soft
+from protein_affinity_gpu.sasa_soft import calculate_sasa_batch_scan_soft
+```
+
+Experimental entry points and kernels still live on the experimental surface —
+import them from `protein_affinity_gpu.experimental`. See
+[EXPERIMENTAL.md](EXPERIMENTAL.md).
 
 ### 3.1 Structure I/O — `utils/structure.py`
 
@@ -212,10 +231,11 @@ GPU. Tags: `jax.sasa.block`, `jax.sasa.scan`, `jax.sasa.single`,
 `tinygrad.sasa.block`. Enable via `setup_logging("INFO")` or `--verbose` in
 the CLIs.
 
-Experimental kernels (`calculate_sasa_jax_soft`, `calculate_sasa_jax_neighbor`,
-`calculate_sasa_batch_soft`, `calculate_sasa_batch_scan_soft`,
-`calculate_sasa_tinygrad`, `calculate_sasa_tinygrad_neighbor`) are
-documented in [EXPERIMENTAL.md §3](EXPERIMENTAL.md).
+Stable differentiable SASA kernels
+(`calculate_sasa_jax_soft`, `calculate_sasa_batch_soft`,
+`calculate_sasa_batch_scan_soft`) and the reusable AFDesign `ba_val` helper
+are documented in [AF_DESIGN.md](AF_DESIGN.md). Experimental kernels and
+entry points are documented in [EXPERIMENTAL.md §3](EXPERIMENTAL.md).
 
 ### 3.5 Contact analysis — `contacts.py`
 

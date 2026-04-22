@@ -5,9 +5,14 @@
 Three first-class backends — CPU (freesasa via PRODIGY), JAX (blocked
 and `lax.scan`-fused Shrake–Rupley), and tinygrad (per-shape `TinyJit`
 block kernel on METAL / CUDA / GPU; full fused kernel on CPU / CLANG).
-Soft/differentiable SASA and the extra JAX modes (single-pass,
-neighbor-cutoff) are documented separately in
-[docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md).
+Stable differentiable helpers for AFDesign-style losses live in
+[`protein_affinity_gpu.sasa_soft`](src/protein_affinity_gpu/sasa_soft.py),
+[`protein_affinity_gpu.contacts_soft`](src/protein_affinity_gpu/contacts_soft.py),
+[`protein_affinity_gpu.scoring_soft`](src/protein_affinity_gpu/scoring_soft.py),
+and [`protein_affinity_gpu.af_design`](src/protein_affinity_gpu/af_design.py).
+Experimental JAX modes (single-pass, neighbor-cutoff) remain documented in
+[docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md). See
+[docs/AF_DESIGN.md](docs/AF_DESIGN.md) for the soft-vs-hard design notes.
 
 ## Installation
 
@@ -98,7 +103,11 @@ jax_scan   = predict_binding_affinity_jax(structure, selection="A,B", mode="scan
 # Or route through the unified predictor:
 result = predict(structure, backend="jax", selection="A,B")
 
-# Experimental (tinygrad / single / neighbor / soft) — see docs/EXPERIMENTAL.md:
+# Stable differentiable helpers for design-time losses:
+from protein_affinity_gpu.af_design import add_ba_val_loss
+from protein_affinity_gpu.sasa_soft import calculate_sasa_batch_scan_soft
+
+# Experimental (tinygrad / single / neighbor entry points) — see docs/EXPERIMENTAL.md:
 from protein_affinity_gpu.experimental import predict_binding_affinity_tinygrad
 tg_result = predict_binding_affinity_tinygrad(structure, selection="A,B")
 ```

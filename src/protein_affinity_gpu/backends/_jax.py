@@ -1,8 +1,8 @@
 """JAX ``BackendAdapter`` implementation — default block / scan modes only.
 
-Single-pass, neighbor-cutoff and soft (differentiable) SASA kernels live in
-:mod:`..sasa_experimental` and are exposed through
-:class:`..backends._jax_experimental.JAXExperimentalAdapter`.
+Single-pass and neighbor-cutoff SASA kernels live behind the experimental
+adapter. Stable differentiable soft-SASA kernels live in :mod:`..sasa_soft`
+and are also exposed through :class:`..backends._jax_experimental.JAXExperimentalAdapter`.
 """
 from __future__ import annotations
 

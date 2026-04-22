@@ -4,12 +4,8 @@ from __future__ import annotations
 from typing import Literal
 
 from ..sasa import calculate_sasa_batch, calculate_sasa_batch_scan, calculate_sasa_jax
-from ..sasa_experimental import (
-    calculate_sasa_batch_scan_soft,
-    calculate_sasa_batch_soft,
-    calculate_sasa_jax_neighbor,
-    calculate_sasa_jax_soft,
-)
+from ..sasa_experimental import calculate_sasa_jax_neighbor
+from ..sasa_soft import calculate_sasa_batch_scan_soft, calculate_sasa_batch_soft, calculate_sasa_jax_soft
 from ..utils._array import Array
 from ._jax import JAXAdapter
 
