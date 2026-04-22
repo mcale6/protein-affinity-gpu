@@ -72,11 +72,6 @@ image = (
         "jax[cuda12]",
         COLABDESIGN_GIT_URL,
     )
-    .add_local_dir(
-        "src",
-        remote_path="/root/src",
-        ignore=["**/__pycache__/**"],
-    )
     .env(
         {
             "PYTHONPATH": "/root:/root/src",
@@ -84,6 +79,11 @@ image = (
         }
     )
     .workdir("/root")
+    .add_local_dir(
+        "src",
+        remote_path="/root/src",
+        ignore=["**/__pycache__/**"],
+    )
 )
 app = modal.App(APP_NAME, image=image)
 
