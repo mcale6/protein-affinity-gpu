@@ -214,11 +214,13 @@ editing the file in place before installing, or by overriding
 ## Modal Benchmark
 
 The comparison figure below is committed at
-[`benchmarks/output/combined/comparison_figure.png`](benchmarks/output/combined/comparison_figure.png).
+[`docs/assets/comparison_figure.png`](docs/assets/comparison_figure.png).
 It is the merged output of one local Apple M2 run and one Modal A100-80GB
-run, plotted with `benchmarks/plot_results.py`.
+run, plotted with `benchmarks/plot_results.py` (which writes into the
+gitignored `benchmarks/output/combined/` and is copied into
+`docs/assets/` for the README).
 
-![Backend comparison on Kahraman 2013 T3](benchmarks/output/combined/comparison_figure.png)
+![Backend comparison on Kahraman 2013 T3](docs/assets/comparison_figure.png)
 
 ### What was compared
 
@@ -341,12 +343,30 @@ modal volume get protein-affinity-gpu-benchmarks \
   analytical SASA. Not used here because the per-atom arc bookkeeping
   is hard to vectorise on GPU; listed for completeness as the classical
   alternative.
+- **EDTSurf (alternative, grid / Euclidean Distance Transform)** — Xu,
+  D., Zhang, Y. *Generating triangulated macromolecular surfaces by
+  Euclidean Distance Transform.* PLoS ONE 4(12), e8140 (2009).
+  <https://doi.org/10.1371/journal.pone.0008140>. Computes
+  solvent-accessible / solvent-excluded / van der Waals surfaces on a
+  regular 3D grid via EDT rather than per-atom sphere integration.
+  Another candidate swap-in; not used here because a grid-resolution
+  discretisation with per-grid-cell occlusion tests does not map as
+  cleanly onto the existing `[N_atoms, N_sphere_points]` tensor kernels
+  as Shrake–Rupley.
 - **AlphaFold2** — Jumper, J. et al. *Highly accurate protein structure
   prediction with AlphaFold.* Nature 596, 583–589 (2021).
   <https://doi.org/10.1038/s41586-021-03819-2>. The `atom14` padded
   representation used throughout the JAX / tinygrad kernels and the
   AFDesign integration in `protein_affinity_gpu.af_design` follow the
   AlphaFold2 residue layout.
+- **ColabDesign / AfDesign** — Krypton, S. et al. *ColabDesign:
+  Making protein design accessible to all via Google Colab.*
+  <https://github.com/sokrypton/ColabDesign>. The `add_ba_val_loss`
+  helper in `protein_affinity_gpu.af_design` plugs into ColabDesign's
+  AfDesign binder-hallucination protocol as an auxiliary loss; the
+  Modal entrypoint at
+  [`benchmarks/modal_afdesign_ba_val.py`](benchmarks/modal_afdesign_ba_val.py)
+  installs `ColabDesign@v1.1.1` directly from the upstream repo.
 - **NACCESS / Van der Waals radii** — Hubbard, S.J., Thornton, J.M.
   *NACCESS (computer program).* Department of Biochemistry and Molecular
   Biology, University College London (1993). The radii file at
