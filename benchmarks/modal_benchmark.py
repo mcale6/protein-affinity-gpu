@@ -1,5 +1,14 @@
 #!/usr/bin/env python3
-"""Modal entrypoint for the notebook-style SASA benchmark sweep."""
+"""Modal GPU benchmark harness.
+
+Runs the JAX (single / batch / scan) and tinygrad (single / batch) targets
+over the Kahraman manifest on a Modal GPU. Emits the same ``results.csv`` /
+``summary.json`` schema as ``benchmarks/benchmark.py`` so the two CSVs can
+be merged by ``plot_results.py`` into a single figure.
+
+The Modal image is GPU-only — it does not install ``freesasa`` or
+``prodigy-prot``, so the ``cpu`` target must run locally.
+"""
 from __future__ import annotations
 
 import json
@@ -24,7 +33,13 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import-time guidance
         "\"python -m pip install -e '.[modal]'\" or \"pip install modal\"."
     ) from exc
 
-from benchmarks.sasa_benchmark import DEFAULT_GPU_TARGETS, parse_targets, run_sasa_benchmark  # noqa: E402
+from benchmarks.sasa.sasa_benchmark import (  # noqa: E402
+    BACKENDS,
+    DEFAULT_REPEATS,
+    DEFAULT_SPHERE_POINTS,
+    GPU_DEFAULT_TARGETS,
+    run_benchmark,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -71,17 +86,27 @@ image = (
 app = modal.App(APP_NAME, image=image)
 
 
-def _validate_modal_targets(targets: tuple[str, ...]) -> tuple[str, ...]:
+def _parse_targets(value: str) -> list[str]:
+    if not value:
+        return list(GPU_DEFAULT_TARGETS)
+    targets = [item.strip() for item in value.split(",") if item.strip()]
+    if not targets:
+        raise ValueError("At least one benchmark target is required.")
+    unknown = [t for t in targets if t not in BACKENDS]
+    if unknown:
+        raise ValueError(
+            f"Unknown target(s): {unknown}. Available: {sorted(BACKENDS)}"
+        )
     if "cpu" in targets:
         raise ValueError(
             "The Modal image is GPU-only and does not install 'prodigy-prot' or "
-            "'freesasa'. Remove 'cpu' from --targets for Modal runs."
+            "'freesasa'. Run 'cpu' locally via benchmarks/benchmark.py instead."
         )
     return targets
 
 
 def _volume_relative(path: Path) -> str:
-    return path.relative_to(REMOTE_VOLUME_ROOT).as_posix()
+    return str(Path(path).relative_to(REMOTE_VOLUME_ROOT))
 
 
 def _download_file(remote_path: str, local_path: Path) -> None:
@@ -96,9 +121,9 @@ def _download_file(remote_path: str, local_path: Path) -> None:
     volumes={VOLUME_MOUNT: volume},
 )
 def run_remote_benchmark(
-    repeats: int = 2,
-    targets: str = ",".join(DEFAULT_GPU_TARGETS),
-    sphere_points: int = 100,
+    repeats: int = DEFAULT_REPEATS,
+    targets: str = ",".join(GPU_DEFAULT_TARGETS),
+    sphere_points: int = DEFAULT_SPHERE_POINTS,
     limit: int = 0,
     run_name: str = "",
 ) -> dict[str, object]:
@@ -106,18 +131,20 @@ def run_remote_benchmark(
     logging.getLogger("protein_affinity_gpu").setLevel(logging.INFO)
 
     resolved_run_name = run_name.strip() or datetime.now(timezone.utc).strftime(
-        "sasa-benchmark-%Y%m%d-%H%M%S"
+        "gpu-benchmark-%Y%m%d-%H%M%S"
     )
     output_dir = REMOTE_RUNS_DIR / resolved_run_name
-    resolved_targets = _validate_modal_targets(parse_targets(targets))
-    summary = run_sasa_benchmark(
+    resolved_targets = _parse_targets(targets)
+
+    summary = run_benchmark(
         manifest_path=REMOTE_MANIFEST,
         structures_dir=REMOTE_STRUCTURES_DIR,
         output_dir=output_dir,
+        backends=resolved_targets,
         repeats=repeats,
-        targets=resolved_targets,
         sphere_points=sphere_points,
         limit=limit if limit > 0 else None,
+        device=f"gpu:{GPU_TYPE}",
     )
     volume.commit()
 
@@ -137,9 +164,9 @@ def run_remote_benchmark(
 
 @app.local_entrypoint()
 def main(
-    repeats: int = 2,
-    targets: str = ",".join(DEFAULT_GPU_TARGETS),
-    sphere_points: int = 100,
+    repeats: int = DEFAULT_REPEATS,
+    targets: str = ",".join(GPU_DEFAULT_TARGETS),
+    sphere_points: int = DEFAULT_SPHERE_POINTS,
     limit: int = 0,
     run_name: str = "",
     local_output_dir: str = "",

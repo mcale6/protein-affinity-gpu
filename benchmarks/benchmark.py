@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""Default benchmark harness — CPU / JAX (block) / JAX (scan) with memory profiling.
+"""Local benchmark harness (Apple M2 / CPU box).
 
-Drops single / neighbor / soft / tinygrad targets relative to
-:mod:`benchmark_experimental`. Each target run records peak process RSS
-(and, when available, the JAX device ``peak_bytes_in_use``) so the
-memory footprint surfaces in the JSON alongside timings.
+Runs the CPU and tinygrad targets (``cpu``, ``tinygrad-single``,
+``tinygrad-batch``) over a Kahraman-style manifest and writes the unified
+``results.csv`` / ``summary.json`` used by ``plot_results.py``.
+
+The GPU equivalent (JAX single / batch / scan + tinygrad single / batch)
+lives in ``benchmarks/modal_benchmark.py``; both runners share the inner
+loop in ``benchmarks/sasa/sasa_benchmark.py`` so the CSV schema is
+identical and the two outputs can be merged into a single figure.
 """
+from __future__ import annotations
 
 import argparse
-import gc
 import json
 import logging
-import resource
 import sys
-import time
-import traceback
-from datetime import datetime, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,405 +25,99 @@ for candidate in (ROOT, SRC):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-try:
-    from protein_affinity_gpu.cpu import predict_binding_affinity  # noqa: E402
-    from protein_affinity_gpu.utils.resources import collect_structure_files, format_duration  # noqa: E402
-    from protein_affinity_gpu.utils._array import NumpyEncoder  # noqa: E402
-except ModuleNotFoundError as exc:  # pragma: no cover - import-time guidance
-    raise SystemExit(
-        f"Missing Python dependency '{exc.name}'. "
-        "Use the repo virtualenv or install dependencies with "
-        "\".venv/bin/python -m pip install -e '.[compare]'\"."
-    ) from exc
+from benchmarks.sasa.sasa_benchmark import (  # noqa: E402
+    BACKENDS,
+    DEFAULT_MANIFEST,
+    DEFAULT_REPEATS,
+    DEFAULT_SPHERE_POINTS,
+    DEFAULT_STRUCTURES_DIR,
+    LOCAL_DEFAULT_TARGETS,
+    run_benchmark,
+)
 
 LOGGER = logging.getLogger(__name__)
-
-DEFAULT_TARGETS = ("cpu", "jax", "jax-scan")
-
-
-def _load_jax_predictor(mode: str = "block"):
-    from protein_affinity_gpu.predict import predict_binding_affinity_jax
-
-    def predictor(**kwargs):
-        return predict_binding_affinity_jax(mode=mode, **kwargs)
-
-    return predictor
-
-
-def _count_atoms(structure_path: Path, selection: str) -> int:
-    """Atom14-compacted atom count (matches what the SASA kernel sees)."""
-    from protein_affinity_gpu.utils.atom14 import compact_complex_atom14
-    from protein_affinity_gpu.utils.structure import load_complex
-
-    target, binder = load_complex(structure_path, selection=selection, sanitize=True)
-    positions, mask, _, _ = compact_complex_atom14(target, binder)
-    del positions
-    return int(mask.sum())
-
-
-def cuda_available() -> bool:
-    try:
-        import jax
-    except ImportError:
-        return False
-
-    platforms = {device.platform.lower() for device in jax.devices()}
-    return "gpu" in platforms or "cuda" in platforms
-
-
-def _rss_mb() -> float:
-    """Process high-water RSS in MB (macOS reports bytes, Linux KB)."""
-    factor = 1024 * 1024 if sys.platform == "darwin" else 1024
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / factor
-
-
-def _jax_memory_snapshot() -> dict[str, float]:
-    """``jax.devices()[0].memory_stats`` as MB. ``{}`` on CPU / unsupported backends."""
-    try:
-        import jax
-
-        stats = jax.devices()[0].memory_stats()
-    except Exception:  # noqa: BLE001
-        return {}
-    if not stats:
-        return {}
-    return {
-        "jax_in_use_mb": stats.get("bytes_in_use", 0) / 1e6,
-        "jax_peak_mb": stats.get("peak_bytes_in_use", 0) / 1e6,
-    }
-
-
-def _benchmark_single(predictor, structure_path: Path, repeats: int, **kwargs):
-    """Run ``predictor`` ``repeats`` times, capturing timing + memory per run.
-
-    Memory profile recorded per run:
-    - ``rss_peak_mb`` — process RSS high-water mark after the run. Monotonic
-      (``ru_maxrss`` only grows), so later runs reflect the cumulative peak;
-      we still emit all values so the first cold-call peak is visible.
-    - ``rss_delta_mb`` — rise vs. the pre-run snapshot; the cold call's delta
-      is the new scratch a first-time compile pulled in, warm calls typically
-      approach zero.
-    - ``jax_peak_mb`` / ``jax_in_use_mb`` — only present on GPU / Metal; same
-      peak semantics as the process-level RSS.
-    """
-    timings = []
-    mem_samples = []
-    last_result = None
-    for _ in range(repeats):
-        gc.collect()
-        rss_before = _rss_mb()
-        jax_before = _jax_memory_snapshot()
-
-        start_time = time.perf_counter()
-        last_result = predictor(struct_path=structure_path, **kwargs)
-        timings.append(time.perf_counter() - start_time)
-
-        rss_after = _rss_mb()
-        jax_after = _jax_memory_snapshot()
-        sample = {
-            "rss_peak_mb": rss_after,
-            "rss_delta_mb": rss_after - rss_before,
-        }
-        if jax_after:
-            sample["jax_peak_mb"] = jax_after.get("jax_peak_mb")
-            sample["jax_in_use_mb"] = jax_after.get("jax_in_use_mb")
-            if jax_before:
-                sample["jax_peak_delta_mb"] = (
-                    jax_after.get("jax_peak_mb", 0.0)
-                    - jax_before.get("jax_peak_mb", 0.0)
-                )
-        mem_samples.append(sample)
-
-    cold_time = timings[0]
-    warm_times = timings[1:]
-
-    def _peak(key: str) -> float | None:
-        values = [s[key] for s in mem_samples if s.get(key) is not None]
-        return max(values) if values else None
-
-    return {
-        "structure_id": structure_path.stem,
-        "cold_time_seconds": cold_time,
-        "cold_time_formatted": format_duration(cold_time),
-        "warm_times_seconds": warm_times,
-        "warm_mean_seconds": (sum(warm_times) / len(warm_times)) if warm_times else cold_time,
-        "memory": {
-            "per_run": mem_samples,
-            "rss_peak_mb": _peak("rss_peak_mb"),
-            "jax_peak_mb": _peak("jax_peak_mb"),
-        },
-        "result": last_result.to_dict() if last_result is not None else None,
-    }
-
-
-def _load_manifest(manifest_path: Path, structures_dir: Path) -> list[tuple[Path, str]]:
-    """Parse a Kahraman-style TSV (``pdb_id\tchain1\tchain2\t...``)."""
-    pairs: list[tuple[Path, str]] = []
-    with manifest_path.open() as f:
-        header = f.readline()  # skip
-        del header
-        for line in f:
-            parts = line.rstrip("\n").split("\t")
-            if len(parts) < 3 or not parts[0]:
-                continue
-            pdb_id = parts[0].upper()
-            chain1, chain2 = parts[1], parts[2]
-            path = structures_dir / f"{pdb_id}.pdb"
-            if not path.exists():
-                path = structures_dir / f"{pdb_id}.cif"
-            if path.exists():
-                pairs.append((path, f"{chain1},{chain2}"))
-    return pairs
-
-
-def run_benchmark(
-    input_path: Path | None,
-    output_dir: Path,
-    repeats: int = 3,
-    targets: tuple[str, ...] = DEFAULT_TARGETS,
-    selection: str = "A,B",
-    temperature: float = 25.0,
-    distance_cutoff: float = 5.5,
-    acc_threshold: float = 0.05,
-    sphere_points: int = 100,
-    manifest: Path | None = None,
-    structures_dir: Path | None = None,
-):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    if manifest is not None:
-        if structures_dir is None:
-            raise ValueError("--manifest requires --structures-dir")
-        structure_pairs = _load_manifest(manifest, structures_dir)
-    else:
-        structures = collect_structure_files(input_path)
-        structure_pairs = [(path, selection) for path in structures]
-    benchmark_report = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "targets": list(targets),
-        "repeats": repeats,
-        "results": [],
-    }
-
-    LOGGER.info(
-        "benchmark: %d structures × %d targets × %d repeats",
-        len(structure_pairs), len(targets), repeats,
-    )
-
-    for structure_path, sel in structure_pairs:
-        try:
-            n_atoms = _count_atoms(structure_path, sel)
-        except Exception:  # noqa: BLE001
-            n_atoms = None
-
-        LOGGER.info("benchmark: %s N=%s sel=%s", structure_path.stem, n_atoms, sel)
-        for target in targets:
-            if target == "cuda":
-                if not cuda_available():
-                    benchmark_report["results"].append(
-                        {
-                            "structure_id": structure_path.stem,
-                            "target": target,
-                            "status": "skipped",
-                            "reason": "CUDA backend not available.",
-                        }
-                    )
-                    continue
-                predictor = _load_jax_predictor("block")
-            elif target == "jax":
-                predictor = _load_jax_predictor("block")
-            elif target == "jax-scan":
-                predictor = _load_jax_predictor("scan")
-            elif target == "cpu":
-                predictor = predict_binding_affinity
-            else:
-                raise ValueError(
-                    f"Unknown target {target!r} — default benchmark accepts "
-                    f"{DEFAULT_TARGETS}. Use benchmark_experimental.py for "
-                    "tinygrad / single / neighbor / soft."
-                )
-
-            try:
-                result = _benchmark_single(
-                    predictor,
-                    structure_path,
-                    repeats=repeats,
-                    selection=sel,
-                    temperature=temperature,
-                    distance_cutoff=distance_cutoff,
-                    acc_threshold=acc_threshold,
-                    sphere_points=sphere_points,
-                    save_results=False,
-                    quiet=True,
-                )
-                result["target"] = target
-                result["status"] = "ok"
-                result["n_atoms"] = n_atoms
-                result["selection"] = sel
-                benchmark_report["results"].append(result)
-                mem = result["memory"]
-                LOGGER.info(
-                    "  %-10s ok  cold=%.2fs warm=%.1fms rss_peak=%.0fMB jax_peak=%s",
-                    target, result["cold_time_seconds"], result["warm_mean_seconds"] * 1000,
-                    mem.get("rss_peak_mb") or 0.0,
-                    f"{mem['jax_peak_mb']:.0f}MB" if mem.get("jax_peak_mb") else "n/a",
-                )
-            except Exception as exc:  # noqa: BLE001
-                tb_tail = traceback.format_exc().splitlines()[-6:]
-                benchmark_report["results"].append(
-                    {
-                        "structure_id": structure_path.stem,
-                        "target": target,
-                        "status": "error",
-                        "reason": f"{exc.__class__.__name__}: {exc}",
-                        "traceback_tail": tb_tail,
-                        "n_atoms": n_atoms,
-                        "selection": sel,
-                    }
-                )
-                LOGGER.warning(
-                    "  %-10s ERR %s: %s", target, exc.__class__.__name__, str(exc)[:160],
-                )
-
-    output_path = output_dir / "benchmark_results.json"
-    output_path.write_text(json.dumps(benchmark_report, indent=2, cls=NumpyEncoder))
-
-    ok = sum(1 for r in benchmark_report["results"] if r.get("status") == "ok")
-    err = sum(1 for r in benchmark_report["results"] if r.get("status") == "error")
-    skipped = sum(1 for r in benchmark_report["results"] if r.get("status") == "skipped")
-    LOGGER.info("benchmark: finished ok=%d err=%d skipped=%d → %s", ok, err, skipped, output_path)
-    if err:
-        err_by_target: dict[str, int] = {}
-        for row in benchmark_report["results"]:
-            if row.get("status") == "error":
-                err_by_target[row["target"]] = err_by_target.get(row["target"], 0) + 1
-        for tgt, count in sorted(err_by_target.items()):
-            LOGGER.warning("  %d errors on target %s", count, tgt)
-
-    return output_path, benchmark_report
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Default benchmark — CPU + JAX (block / scan) with memory profile."
+        description=(
+            "Local benchmark harness — CPU + tinygrad targets over a "
+            "Kahraman-style manifest. Writes results.csv + summary.json into "
+            "--output-dir."
+        ),
     )
     parser.add_argument(
-        "input_path", type=Path, nargs="?", default=None,
-        help="Path to a structure file or directory (omit when using --manifest).",
+        "--manifest", type=Path, default=DEFAULT_MANIFEST,
+        help="TSV with pdb_id/chain1/chain2 columns.",
     )
     parser.add_argument(
-        "--manifest", type=Path, default=None,
-        help="TSV with pdb_id / chain1 / chain2 columns; pairs structures with per-PDB selections.",
+        "--structures-dir", type=Path, default=DEFAULT_STRUCTURES_DIR,
+        help="Directory of PDB/CIF files (created + populated if missing).",
     )
     parser.add_argument(
-        "--structures-dir", type=Path, default=None,
-        help="Directory containing PDB files referenced in the manifest.",
-    )
-    parser.add_argument("--output-dir", type=Path, default=Path("benchmarks/output"), help="Benchmark artifact directory.")
-    parser.add_argument("--repeats", type=int, default=3, help="Number of runs per target.")
-    parser.add_argument("--selection", default="A,B", help="Two-chain selection, for example 'A,B'.")
-    parser.add_argument("--temperature", type=float, default=25.0, help="Temperature in Celsius.")
-    parser.add_argument("--distance-cutoff", type=float, default=5.5, help="Interface distance cutoff in angstrom.")
-    parser.add_argument("--acc-threshold", type=float, default=0.05, help="Relative SASA threshold.")
-    parser.add_argument("--sphere-points", type=int, default=100, help="Number of sphere points for SASA.")
-    parser.add_argument(
-        "--targets",
-        nargs="+",
-        choices=("cpu", "cuda", "jax", "jax-scan"),
-        default=DEFAULT_TARGETS,
-        help="Benchmark targets to run (default: cpu jax jax-scan).",
+        "--output-dir", type=Path, default=ROOT / "benchmarks/output/local",
+        help="Where to write results.csv, summary.json, manifest_subset.tsv.",
     )
     parser.add_argument(
-        "--plot", type=Path, default=None,
-        help="If set, save a log-log PNG of warm-mean time vs atom count.",
+        "--targets", nargs="+", default=list(LOCAL_DEFAULT_TARGETS),
+        choices=sorted(BACKENDS),
+        help=f"Targets to run (default: {' '.join(LOCAL_DEFAULT_TARGETS)}).",
     )
-    parser.add_argument("--verbose", action="store_true", help="Enable informational logging.")
+    parser.add_argument("--repeats", type=int, default=DEFAULT_REPEATS)
+    parser.add_argument("--sphere-points", type=int, default=DEFAULT_SPHERE_POINTS)
+    parser.add_argument("--temperature", type=float, default=25.0)
+    parser.add_argument("--distance-cutoff", type=float, default=5.5)
+    parser.add_argument("--acc-threshold", type=float, default=0.05)
+    parser.add_argument(
+        "--limit", type=int, default=0,
+        help="Optional manifest row limit for quick smoke runs.",
+    )
+    parser.add_argument(
+        "--device-label", default=None,
+        help="Override the detected device label recorded in each row.",
+    )
+    parser.add_argument("--verbose", action="store_true")
     return parser
-
-
-def _plot_report(report: dict, out_path: Path) -> None:
-    """Log-log scatter of warm-mean time vs atom count, one line per target."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    markers = {"cpu": "x", "cuda": "o", "jax": "o", "jax-scan": "P"}
-    colors = {"cpu": "#2ca02c", "cuda": "#1f77b4", "jax": "#1f77b4", "jax-scan": "#8c564b"}
-
-    by_target: dict[str, list[tuple[int, float]]] = {}
-    for row in report["results"]:
-        if row.get("status") != "ok" or row.get("n_atoms") is None:
-            continue
-        by_target.setdefault(row["target"], []).append(
-            (int(row["n_atoms"]), float(row["warm_mean_seconds"]) * 1000.0)
-        )
-
-    fig, ax = plt.subplots(figsize=(8, 6))
-    for target, pts in sorted(by_target.items()):
-        pts.sort()
-        xs, ys = zip(*pts)
-        ax.plot(
-            xs, ys,
-            marker=markers.get(target, "."),
-            color=colors.get(target),
-            linewidth=1.6,
-            markersize=7,
-            label=target,
-        )
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("atom14 atoms (non-padding)")
-    ax.set_ylabel("warm-mean pipeline time (ms)")
-    ax.set_title("predict_binding_affinity: time vs N atoms (default targets)")
-    ax.grid(True, which="both", ls=":", alpha=0.4)
-    ax.legend(frameon=False)
-    fig.tight_layout()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    level = logging.INFO if args.verbose else logging.WARNING
-    logging.basicConfig(level=level, format="%(message)s")
-    logging.getLogger("protein_affinity_gpu").setLevel(level)
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="[%(name)s] %(message)s",
+    )
+    logging.getLogger("protein_affinity_gpu").setLevel(
+        logging.INFO if args.verbose else logging.WARNING
+    )
 
-    if args.manifest is None and args.input_path is None:
-        parser.error("Pass a structure path or --manifest PATH --structures-dir DIR.")
-    if args.manifest is not None and args.structures_dir is None:
-        parser.error("--manifest requires --structures-dir.")
-    if args.input_path is not None and not args.input_path.exists():
-        parser.error(f"Input path not found: {args.input_path}")
+    if not args.manifest.exists():
+        parser.error(f"Manifest not found: {args.manifest}")
 
     try:
-        output_path, report = run_benchmark(
-            input_path=args.input_path,
+        summary = run_benchmark(
+            manifest_path=args.manifest,
+            structures_dir=args.structures_dir,
             output_dir=args.output_dir,
+            backends=args.targets,
             repeats=args.repeats,
-            targets=tuple(args.targets),
-            selection=args.selection,
             temperature=args.temperature,
             distance_cutoff=args.distance_cutoff,
             acc_threshold=args.acc_threshold,
             sphere_points=args.sphere_points,
-            manifest=args.manifest,
-            structures_dir=args.structures_dir,
+            limit=args.limit if args.limit > 0 else None,
+            device=args.device_label,
         )
     except Exception as exc:  # pragma: no cover - CLI surface
         LOGGER.error(str(exc))
         return 1
 
-    LOGGER.info("Benchmark results written to %s", output_path)
-
-    plot_path = args.plot if args.plot else args.output_dir / "benchmark_results.png"
-    try:
-        _plot_report(report, plot_path)
-        LOGGER.info("Plot written to %s", plot_path)
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Plot failed: %s", exc)
-
-    print(json.dumps(report, indent=2, cls=NumpyEncoder))
-    return 0
+    print(json.dumps(summary, indent=2))
+    completed = max(
+        (entry.get("completed", 0) for entry in summary["per_backend"].values()),
+        default=0,
+    )
+    return 0 if completed else 1
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI entry point
