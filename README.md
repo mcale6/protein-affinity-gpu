@@ -130,45 +130,31 @@ given `--output-json`:
 
 ## Backends and Devices
 
-| Backend | Entry point | Requires | Device selection |
-|---------|-------------|----------|------------------|
-| CPU (PRODIGY) | `predict_binding_affinity` | `prodigy-prot`, `freesasa` | n/a |
-| JAX | `predict_binding_affinity_jax` (`mode="block"`/`"scan"`) | `jax`, `jaxlib` | `jax.default_backend()` |
-| tinygrad | `predict_binding_affinity_tinygrad` (`mode="block"`/`"single"`/`"neighbor"`) | `tinygrad` | `Device.DEFAULT`, override via `TINYGRAD_DEVICE` |
+| Backend | Entry point | Device selection |
+|---------|-------------|------------------|
+| CPU (PRODIGY / freesasa) | `predict_binding_affinity` | n/a |
+| JAX — `mode="block"`/`"scan"`/`"single"` | `predict_binding_affinity_jax` | `JAX_PLATFORMS=cpu`/`cuda` |
+| tinygrad — `mode="block"`/`"single"`/`"neighbor"` | `predict_binding_affinity_tinygrad` | `TINYGRAD_DEVICE=CPU`/`METAL`/`CUDA` |
 
-Every backend shares one pipeline in `protein_affinity_gpu.predict`
-parametrized by a `BackendAdapter` (see `protein_affinity_gpu.backends`).
-Each adapter owns device resolution, lazy constant materialization, SASA
-kernel dispatch, and the block-size heuristic:
+All three backends share one pipeline parametrised by a
+`BackendAdapter` that owns device resolution, lazy constant
+materialisation, kernel dispatch, and the block-size heuristic. The
+`mode` kwarg picks the SASA kernel family — `block` (bounded scratch,
+per-shape JIT cache; default), `scan` (JAX-only, `lax.scan`-fused),
+`single` (fully fused `[N, M, N]`; fastest when it fits), and `neighbor`
+(tinygrad-only, `topk`-pruned; for memory-constrained GPUs).
 
-- **JAX / CUDA** — `JAXAdapter.validate_size()` reads total GPU memory via
-  `nvidia-smi` and raises `ValueError` if a complex exceeds the estimated
-  ceiling; block size targets ~1 GB float32 scratch.
-- **JAX / Apple Metal** — skips the size check (unified memory); block size
-  comes from an empirical exp-decay fit of throughput vs atom count.
-- **JAX / CPU** — conservative 100k-atom ceiling.
-- **tinygrad / METAL, CUDA, GPU** — batched SASA with `block = min(768, N)`
-  via a per-shape `TinyJit` cache.
-- **tinygrad / CPU, CLANG** — full (non-batched) SASA kernel, also
-  `TinyJit`-wrapped.
+On the Kahraman 2013 T3 set (16 two-chain complexes, padded
+N ∈ [2.5k, 12.8k]) the tinygrad block kernel runs at ~0.69 s warm-mean
+vs ~0.49 s for CPU freesasa — within 1.5× of CPU — with Pearson
+`r > 0.9998` against CPU on per-structure SASA totals and `r = 1.000`
+on ΔG, Kd, NIS and contact metrics.
 
-Force a JAX device with standard JAX environment variables, e.g.
-`JAX_PLATFORMS=cpu` or `JAX_PLATFORMS=cuda`. Set
-`TINYGRAD_DEVICE=CPU|METAL|CUDA` to override tinygrad's device choice.
-
-The tinygrad backend exposes three SASA kernels via the `mode` kwarg on
-`predict_binding_affinity_tinygrad`:
-
-| `mode` | Scratch | When to use |
-|--------|---------|-------------|
-| `"block"` (default) | `[block, M, N]`, `block ≤ 768` | Bounded scratch, per-shape `TinyJit` cache. Clear the cache (`sasa._sasa_block_jit_cache.clear()` + `gc.collect()`) between unrelated structures on Metal — each new shape pins ~1–4 GB and they accumulate across long sweeps. |
-| `"single"` | `[N, M, N]` | Fully fused single kernel — fastest when it fits. On Apple Metal handles up to ~12k atom14-padded atoms in isolation; Metal returns `Internal Error (0000000e)` under sustained compile pressure without cache clearing. |
-| `"neighbor"` | `[N, M, K]`, K=64 default | Memory-constrained GPUs — ~80× less scratch than `single` via `Tensor.topk` on negative squared distances. **Slower** than `block` on Apple Metal (`topk` dominates). Lossless when K covers the worst-case occlusion-neighbor count. |
-
-On the Kahraman 2013 T3 set (16 two-chain complexes, padded N ∈ [2.5k, 12.8k])
-the tinygrad block kernel runs at ~0.69 s warm-mean vs ~0.49 s for
-CPU freesasa — within 1.5× of CPU — with Pearson `r > 0.9998` against CPU on
-per-structure SASA totals and `r = 1.000` on ΔG, Kd, NIS and contact metrics.
+See [docs/INDEX.md](docs/INDEX.md) for the full adapter / per-device
+behaviour tables, block-size heuristics, kernel scratch shapes, and the
+tinygrad `mode` trade-offs; [docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md)
+and [docs/TINYGRAD_SASA_OPTIMIZATION.md](docs/TINYGRAD_SASA_OPTIMIZATION.md)
+go deeper on the kernel-level choices.
 
 ## SASA Algorithm — Shrake–Rupley vs Lee–Richards
 
