@@ -70,6 +70,7 @@ image = (
         "biopython",
         "numpy>=1.23,<3.0",
         "jax[cuda12]",
+        "tinygrad",
         COLABDESIGN_GIT_URL,
     )
     .env(
