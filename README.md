@@ -11,35 +11,39 @@ neighbor-cutoff) are documented separately in
 
 ## Installation
 
+End-user install from PyPI — the core deps already cover CPU
+(`prodigy-prot`, `freesasa`), JAX (`jax`, `jaxlib`), tinygrad, and the
+plot stack (`matplotlib`, `pandas`):
+
 ```bash
-python3 -m pip install "protein-affinity-gpu==1.6.9"
+pip install "protein-affinity-gpu==1.6.9"
 ```
 
-A single install pulls in everything — CPU (`prodigy-prot`, `freesasa`),
-JAX (`jax`, `jaxlib`), tinygrad, and the benchmarking plot stack
-(`matplotlib`, `pandas`).
+Contributor / local dev — clone the repo and sync with
+[uv](https://docs.astral.sh/uv/) for a reproducible environment pinned
+against `uv.lock`:
+
+```bash
+uv sync                # core deps into .venv/, honouring uv.lock
+uv sync --extra dev    # adds pytest, ruff, build (for tests + release)
+uv sync --extra modal  # adds modal for the GPU benchmark entrypoint
+```
+
+The three dependency files have distinct jobs: `pyproject.toml` declares
+unpinned ranges and is what PyPI publishes, `uv.lock` is the exact
+pinned resolution, and `.venv/` is a local (gitignored) virtualenv `uv`
+materialises from the lock.
 
 ## CLI
 
-Predict a structure or folder:
+The package installs one console script — `protein-affinity-predict`.
+It runs one structure or a whole folder through any backend:
 
 ```bash
 protein-affinity-predict benchmarks/fixtures --backend cpu --output-json
 protein-affinity-predict benchmarks/fixtures --backend jax --output-json
 protein-affinity-predict benchmarks/fixtures --backend tinygrad --output-json
 ```
-
-Run the benchmark harness:
-
-```bash
-# Default: CPU / JAX (block) / JAX (scan) with memory profiling
-.venv/bin/python benchmarks/benchmark.py benchmarks/fixtures --output-dir benchmarks/output
-
-# Notebook-style Kahraman sweep as a regular Python script
-.venv/bin/python benchmarks/sasa_benchmark.py --output-dir benchmarks/output/colab_sweep
-```
-
-### `protein-affinity-predict` flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -54,26 +58,22 @@ Run the benchmark harness:
 | `--output-dir` | `results/` | Destination when `--output-json` is set. |
 | `--verbose` | off | `DEBUG`-level logging with per-phase timings (stderr, colored on TTY). |
 
-The CLI prints a concise summary per structure to stdout (ΔG, Kd, contact
-analysis, NIS breakdown — the same block you get from `str(result)`).
-`--verbose` additionally streams colored phase timings to stderr, useful
-for profiling the tinygrad / JAX pipelines. Use `--output-json` to persist
-the full per-atom JSON to disk.
+Each run prints the same summary `str(result)` produces — ΔG, Kd,
+contact breakdown, NIS breakdown. `--output-json` persists the full
+per-atom result; `--verbose` streams phase timings to stderr.
 
-### `protein-affinity-benchmark` flags
+Benchmarking is deliberately kept out of the installed CLI — the harness
+scripts live in [`benchmarks/`](benchmarks) and are invoked directly:
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `input_path` | — | File or directory of structures. |
-| `--output-dir` | `benchmarks/output` | Destination for `benchmark_results.json`. |
-| `--repeats` | `3` | Runs per target; first is cold, rest averaged. |
-| `--targets` | `cpu cuda jax jax-scan` | Subset of `{cpu, cuda, jax, jax-scan}` for the default harness. For the extended sweep (`jax-single`, `jax-neighbor`, `jax-soft`, `tinygrad`, `tinygrad-neighbor`), use `benchmarks/sasa_benchmark.py`. |
-| `--selection`, `--temperature`, `--distance-cutoff`, `--acc-threshold`, `--sphere-points` | — | Same meaning as `predict`. |
-| `--verbose` | off | `INFO`-level logging. |
+```bash
+# Default CPU / JAX harness with memory profiling
+.venv/bin/python benchmarks/benchmark.py benchmarks/fixtures --output-dir benchmarks/output
 
-`cuda` is automatically reported as `skipped` when no CUDA device is
-detected, so the harness is safe to run unconditionally on hosts without
-a GPU.
+# Multi-backend comparison (cpu + tinygrad + jax), CSV + three-panel figure
+.venv/bin/python benchmarks/compare.py --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
+    --structures-dir benchmarks/downloads/kahraman_2013_t3 \
+    --backends cpu tinygrad-batch tinygrad-single
+```
 
 ## Python API
 
@@ -103,39 +103,33 @@ from protein_affinity_gpu.experimental import predict_binding_affinity_tinygrad
 tg_result = predict_binding_affinity_tinygrad(structure, selection="A,B")
 ```
 
-## Result Schema
+## Result
 
-Both backends return the same `ProdigyResults` dataclass, with a stable
-`to_dict()` representation that is also what the CLI writes to JSON:
+Every backend returns the same `ProdigyResults` dataclass. Call
+`result.to_dict()` (or `result.save_results(output_dir)`) to get a
+stable JSON-serialisable view — the CLI writes exactly this shape when
+given `--output-json`:
+
+| Field | Meaning |
+|-------|---------|
+| `ba_val` | Predicted ΔG of binding in kcal/mol (PRODIGY IC-NIS). |
+| `kd` | Dissociation constant in molar units — `dg_to_kd(ba_val, temperature)`. |
+| `contacts` | Interface residue–residue contact counts by **A**liphatic / **C**harged / **P**olar pair (`AA`, `CC`, `PP`, `AC`, `AP`, `CP`), plus derived totals (`IC`, `chargedC`, `polarC`, `aliphaticC`). |
+| `nis` | Percentage of the non-interacting surface per character class. |
+| `sasa_data` | Per-atom SASA after the NIS mask, with chain / residue / atom metadata. |
 
 ```json
 {
   "structure_id": "1A2K",
   "ba_val": -9.42,
   "kd": 1.23e-07,
-  "contacts": {
-    "AA": 12.0, "CC": 3.0, "PP": 5.0,
-    "AC": 4.0, "AP": 6.0, "CP": 2.0,
-    "IC": 32.0,
-    "chargedC": 9.0, "polarC": 13.0, "aliphaticC": 22.0
-  },
-  "nis": { "aliphatic": 41.2, "charged": 24.1, "polar": 34.7 },
-  "sasa_data": [
-    { "chain": "A", "resname": "ALA", "resindex": 1,
-      "atomname": "CA", "atom_sasa": 12.5, "relative_sasa": 0.83 }
-  ]
+  "contacts": {"AA": 12, "CC": 3, "PP": 5, "AC": 4, "AP": 6, "CP": 2,
+               "IC": 32, "chargedC": 9, "polarC": 13, "aliphaticC": 22},
+  "nis": {"aliphatic": 41.2, "charged": 24.1, "polar": 34.7},
+  "sasa_data": [{"chain": "A", "resname": "ALA", "resindex": 1,
+                 "atomname": "CA", "atom_sasa": 12.5, "relative_sasa": 0.83}]
 }
 ```
-
-- `ba_val` — predicted ΔG of binding in kcal/mol (PRODIGY IC-NIS).
-- `kd` — dissociation constant in molar units (`dg_to_kd(ba_val, temperature)`).
-- `contacts` — interface residue–residue contact counts by character pair
-  (**A**liphatic / **C**harged / **P**olar), plus derived totals (`IC`,
-  `chargedC`, `polarC`, `aliphaticC`).
-- `nis` — percentage of the non-interacting surface per character class.
-- `sasa_data` — per-atom SASA after masking, with chain / residue metadata.
-
-Save directly to disk with `results.save_results(output_dir)`.
 
 ## Backends and Devices
 
@@ -178,10 +172,6 @@ On the Kahraman 2013 T3 set (16 two-chain complexes, padded N ∈ [2.5k, 12.8k])
 the tinygrad block kernel runs at ~0.69 s warm-mean vs ~0.49 s for
 CPU freesasa — within 1.5× of CPU — with Pearson `r > 0.9998` against CPU on
 per-structure SASA totals and `r = 1.000` on ΔG, Kd, NIS and contact metrics.
-
-## Benchmark Fixtures
-
-The repository tracks a tiny canonical fixture set under [benchmarks/fixtures/1A2K.pdb](benchmarks/fixtures/1A2K.pdb) — it ships with the package so tests and examples work out of the box. Only the generated `benchmarks/output/` and `benchmarks/downloads/` directories are ignored by git.
 
 ## CPU vs JAX Dataset Comparison
 
