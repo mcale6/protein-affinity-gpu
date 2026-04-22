@@ -4,21 +4,25 @@
 > Source of truth: [README.md](../README.md), [pyproject.toml](../pyproject.toml).
 
 `protein-affinity-gpu` is a Python package for protein–protein binding
-affinity prediction with three interchangeable backends:
+affinity prediction with two default backends:
 
 - **CPU** — a thin wrapper around [`prodigy-prot`] + [`freesasa`] that reproduces
   the PRODIGY IC-NIS model.
 - **JAX** — a vectorized re-implementation of the same pipeline that runs on
-  CPU, CUDA, or Apple Metal via [JAX].
-- **tinygrad** — a port of the JAX pipeline onto [tinygrad] that runs on
-  METAL, CUDA, CLANG, or the tinygrad CPU device via
-  `predict_binding_affinity_tinygrad`.
+  CPU, CUDA, or Apple Metal via [JAX]. The default surface exposes a blocked
+  Shrake–Rupley kernel (`mode="block"`) and a `lax.scan`-fused variant
+  (`mode="scan"`) — both share the same `@jit` per-block body.
 
-All backends share one data model ([`Protein`](../src/protein_affinity_gpu/utils/structure.py),
+Both backends share one data model ([`Protein`](../src/protein_affinity_gpu/utils/structure.py),
 [`ProdigyResults`](../src/protein_affinity_gpu/results.py)) so results are
-directly comparable. The JAX and tinygrad backends share a single pipeline
-in [`predict.py`](../src/protein_affinity_gpu/predict.py), parametrized by a
+directly comparable. The JAX backend lives in
+[`predict.py`](../src/protein_affinity_gpu/predict.py), parametrized by a
 [`BackendAdapter`](../src/protein_affinity_gpu/backends/_adapter.py).
+
+Experimental kernels (tinygrad, single-pass / neighbor-cutoff JAX,
+differentiable soft-SASA) and their benchmark harness live behind
+`protein_affinity_gpu.experimental` — see
+[EXPERIMENTAL.md](EXPERIMENTAL.md).
 
 ---
 
@@ -31,12 +35,14 @@ in [`predict.py`](../src/protein_affinity_gpu/predict.py), parametrized by a
 | Python API root | [src/protein_affinity_gpu/__init__.py](../src/protein_affinity_gpu/__init__.py) |
 | Unified predictor | [src/protein_affinity_gpu/predict.py](../src/protein_affinity_gpu/predict.py) |
 | CPU predictor | [src/protein_affinity_gpu/cpu.py](../src/protein_affinity_gpu/cpu.py) |
+| Default SASA kernels | [src/protein_affinity_gpu/sasa.py](../src/protein_affinity_gpu/sasa.py) |
 | Backend adapters | [src/protein_affinity_gpu/backends/](../src/protein_affinity_gpu/backends/) |
+| Experimental surface | [src/protein_affinity_gpu/experimental.py](../src/protein_affinity_gpu/experimental.py) · [docs](EXPERIMENTAL.md) |
 | Logging helpers | [src/protein_affinity_gpu/utils/logging_utils.py](../src/protein_affinity_gpu/utils/logging_utils.py) |
 | Structure loader | [src/protein_affinity_gpu/utils/structure.py](../src/protein_affinity_gpu/utils/structure.py) |
 | CLI — predict | [src/protein_affinity_gpu/cli/predict.py](../src/protein_affinity_gpu/cli/predict.py) |
-| CLI — benchmark | [src/protein_affinity_gpu/cli/benchmark.py](../src/protein_affinity_gpu/cli/benchmark.py) |
-| Benchmark harness | [benchmarks/run.py](../benchmarks/run.py) |
+| Default benchmark | [benchmarks/benchmark.py](../benchmarks/benchmark.py) |
+| Experimental benchmark | [benchmarks/benchmark_experimental.py](../benchmarks/benchmark_experimental.py) |
 | Test suite | [tests/](../tests) |
 | CI | [.github/workflows/ci.yml](../.github/workflows/ci.yml) |
 | Release script | [update_pkg.sh](../update_pkg.sh) |
@@ -53,21 +59,26 @@ protein-affinity-gpu/
 ├── update_pkg.sh              # Bump version + build sdist/wheel
 ├── .github/workflows/ci.yml   # pytest + build on push/PR (Python 3.11)
 ├── benchmarks/
-│   ├── run.py                 # Standalone entry into the benchmark CLI
-│   └── fixtures/1A2K.pdb      # Canonical two-chain complex used by tests
+│   ├── benchmark.py              # Default harness: CPU / JAX (block, scan) + memory profiling
+│   ├── benchmark_experimental.py # Full sweep incl. tinygrad / single / neighbor / soft
+│   ├── run.py                    # Standalone entry into the default benchmark
+│   └── fixtures/1A2K.pdb         # Canonical two-chain complex used by tests
 ├── src/protein_affinity_gpu/
 │   ├── __init__.py            # Public API (lazy-loads impls)
 │   ├── version.py             # __version__ (read by Hatch)
-│   ├── predict.py             # Unified pipeline + `predict(backend=…)` router + jax/tinygrad entry points
+│   ├── predict.py             # Unified pipeline + `predict(backend=…)` router + jax entry point
+│   ├── experimental.py        # Experimental entry points (tinygrad, jax-experimental)
 │   ├── cpu.py                 # PRODIGY + freesasa CPU pipeline
-│   ├── sasa.py                # SASA kernels (JAX + tinygrad, full + blocked)
+│   ├── sasa.py                # Default SASA kernels (JAX block + scan)
+│   ├── sasa_experimental.py   # Experimental SASA kernels (tinygrad, soft, single, neighbor)
 │   ├── contacts.py            # Residue contacts + interaction class counts
 │   ├── scoring.py             # NISCoefficients + backend-agnostic scoring primitives
 │   ├── results.py             # ProdigyResults / ContactAnalysis, JSON writer
 │   ├── backends/
-│   │   ├── _adapter.py        # BackendAdapter Protocol
-│   │   ├── _jax.py            # JAXAdapter
-│   │   └── _tinygrad.py       # TinygradAdapter
+│   │   ├── _adapter.py            # BackendAdapter Protocol
+│   │   ├── _jax.py                # JAXAdapter (block / scan)
+│   │   ├── _jax_experimental.py   # JAXExperimentalAdapter (+ soft / single / neighbor)
+│   │   └── _tinygrad.py           # TinygradAdapter (experimental)
 │   ├── cli/
 │   │   ├── predict.py         # `protein-affinity-predict`
 │   │   └── benchmark.py       # `protein-affinity-benchmark`
@@ -98,15 +109,18 @@ from protein_affinity_gpu import (
     ContactAnalysis,
     load_structure,
     load_complex,
-    predict,                           # unified router: backend="cpu"|"jax"|"tinygrad"
+    predict,                           # unified router: backend="cpu"|"jax"
     predict_binding_affinity,          # CPU-only (legacy alias)
-    predict_binding_affinity_jax,
-    predict_binding_affinity_tinygrad,
+    predict_binding_affinity_jax,      # JAX: mode="block" | "scan"
 )
 ```
 
-Every backend entry point is lazy-loaded at first call so importing the
-package doesn't pull JAX *and* tinygrad into memory.
+The JAX entry point is lazy-loaded at first call so importing the package
+doesn't pull JAX into memory.
+
+Tinygrad and the extended JAX modes (single-pass, neighbor-cutoff, soft)
+live on the experimental surface — import them from
+`protein_affinity_gpu.experimental`. See [EXPERIMENTAL.md](EXPERIMENTAL.md).
 
 ### 3.1 Structure I/O — `utils/structure.py`
 
@@ -141,32 +155,34 @@ predict_binding_affinity(
 from protein_affinity_gpu import predict
 
 predict(
-    struct_path, backend="jax",       # "cpu" | "jax" | "tinygrad"
+    struct_path, backend="jax",       # "cpu" | "jax"
     selection="A,B",
     distance_cutoff=5.5, acc_threshold=0.05,
     temperature=25.0, sphere_points=100,
     save_results=False, output_dir=".", quiet=True,
-    # backend-specific extras flow through **backend_kwargs, e.g. soft_sasa=True
+    # backend-specific extras flow through **backend_kwargs, e.g. mode="scan"
 ) -> ProdigyResults
 ```
 
 `_run_pipeline(adapter, …)` is the shared body consumed by both the router
-and the backend-specific shims below. Each phase (`load_complex`,
+and the backend-specific shim below. Each phase (`load_complex`,
 `contacts`, `sasa`, `nis`, `score`) is wrapped in `log_duration`, so enabling
 debug logging prints a start / done-in-X.XXXs line per phase.
 
-### 3.3a Backend adapters — `backends/`
+### 3.3a Backend adapter — `backends/_jax.py`
 
 The adapter Protocol ([`_adapter.py`](../src/protein_affinity_gpu/backends/_adapter.py))
-names the surface the pipeline calls. Concrete adapters own their
+names the surface the pipeline calls. The default JAX adapter owns its
 device resolution, lazy constants, and kernel dispatch:
 
 | Adapter | Notable behavior |
 |---------|------------------|
-| `JAXAdapter` | `mode={"block","single","scan","neighbor"}` selects the SASA dispatch (default `"block"`). `"single"` is the fully-fused `@jit` (`[N, M, N]` scratch), `"scan"` compiles the whole blocked sweep as one `lax.scan` program (AlphaFold `layer_stack` pattern, pairs with `jax.checkpoint`), `"neighbor"` uses `jax.lax.top_k` to keep the K nearest atoms per row (`k_neighbors=64` default, `[N, M, K]` scratch, ~80× smaller than `"single"`; inference-only). `soft_sasa=True` swaps in the sigmoid SASA kernel (`"block"`/`"scan"`/`"single"` modes only). `validate_size` calls `nvidia-smi` on CUDA; block size uses an exp-decay fit on Metal, ~1 GB scratch target otherwise. |
-| `TinygradAdapter` | `mode={"block","single","neighbor"}` selects the SASA dispatch (default `"block"`). `METAL` / `CUDA` / `GPU` → batched SASA with `block=min(768, N)`; any other device (incl. `CPU` / `CLANG`) → full `calculate_sasa_tinygrad` kernel (`block_size=None`). `"neighbor"` keeps only the K nearest atoms per row (`k_neighbors=64` default) to shrink scratch from `[N, M, N]` to `[N, M, K]`. |
+| `JAXAdapter` | `mode={"block","scan"}` selects the SASA dispatch (default `"block"`). `"block"` runs the `@jit`'d per-block kernel in a Python loop. `"scan"` compiles the whole blocked sweep as one `lax.scan` program (AlphaFold `layer_stack` pattern, pairs with `jax.checkpoint`). `validate_size` calls `nvidia-smi` on CUDA; block size uses an exp-decay fit on Metal, ~1 GB scratch target otherwise. |
 
-### 3.3b Backend entry points (in `predict.py`)
+For tinygrad, single-pass, neighbor-cutoff, and soft-SASA adapters, see
+[EXPERIMENTAL.md §2](EXPERIMENTAL.md).
+
+### 3.3b JAX entry point (in `predict.py`)
 
 ```python
 predict_binding_affinity_jax(
@@ -174,25 +190,11 @@ predict_binding_affinity_jax(
     distance_cutoff=5.5, acc_threshold=0.05,
     temperature=25.0, sphere_points=100,
     save_results=False, output_dir=".", quiet=True,
-    soft_sasa=False, soft_beta=10.0,
-    mode="block",            # "block" | "single" | "scan" | "neighbor"
-    k_neighbors=64,          # only used when mode="neighbor"
-) -> ProdigyResults
-
-predict_binding_affinity_tinygrad(
-    struct_path, selection="A,B",
-    distance_cutoff=5.5, acc_threshold=0.05,
-    temperature=25.0, sphere_points=100,
-    save_results=False, output_dir=".", quiet=True,
-    mode="block",            # "block" | "single" | "neighbor"
-    k_neighbors=64,          # only used when mode="neighbor"
+    mode="block",            # "block" | "scan"
 ) -> ProdigyResults
 ```
 
-Each constructs the matching adapter (`JAXAdapter` / `TinygradAdapter`)
-and delegates to `_run_pipeline`. tinygrad is a core dependency; its
-device selection is `Device.DEFAULT`, overridable via
-`TINYGRAD_DEVICE=CPU|METAL|CUDA`.
+Constructs `JAXAdapter(mode=mode)` and delegates to `_run_pipeline`.
 
 ### 3.4 SASA kernels — `sasa.py`
 
@@ -200,23 +202,22 @@ device selection is `Device.DEFAULT`, overridable via
 |----------|-------|
 | `generate_sphere_points(n)` | Golden-spiral sphere point distribution as `[n, 3]` float32 numpy. Adapters wrap with their native tensor type. |
 | `calculate_sasa_batch(coords, vdw_radii, mask, block_size, sphere_points, probe_radius=1.4)` | Blocked Shrake–Rupley (JAX): Python dispatcher over a `@jit`'d per-block kernel using `|a−b|² = a² + b² − 2⟨a,b⟩`. `[B, N]` inter-mask computed inline via `block_abs_idx` — no upfront `[N, N]` realize. Tail block uses `effective_start` so the kernel compiles once. |
-| `calculate_sasa_batch_soft(..., beta=10.0)` | Differentiable sigmoid-smoothed variant of `calculate_sasa_batch`; shares the `_dispatch_blocked_jax` loop. Approaches the hard kernel as β→∞. |
-| `calculate_sasa_jax(coords, vdw_radii, mask, sphere_points, probe_radius=1.4)` | Fully-fused single-pass `@jit` SASA — `[N, M, N]` peak scratch. Emits an `info`/`warning` log with an estimate of the scratch size so OOMs are obvious. |
-| `calculate_sasa_jax_soft(...)` | Differentiable single-pass JAX SASA (sigmoid kernel); β→∞ recovers `calculate_sasa_jax`. |
-| `calculate_sasa_batch_scan(...)` / `calculate_sasa_batch_scan_soft(...)` | Same blocked kernel as `calculate_sasa_batch`, dispatched via `jax.lax.scan` so the whole sweep compiles as one program; body is wrappable with `jax.checkpoint` for AlphaFold-style memory-efficient backprop. |
-| `calculate_sasa_jax_neighbor(..., k_neighbors=64)` | Single-pass JAX port of `calculate_sasa_tinygrad_neighbor` — `jax.lax.top_k` on `-dist²` keeps the K nearest atoms per row, buried-check scratch `[N, M, K]` instead of `[N, M, N]` (~80× smaller at K=64). `k_neighbors` is a `static_argnames` so XLA const-folds the K dimension. Inference-only (`top_k` isn't usefully differentiable). |
-| `calculate_sasa_tinygrad` | `TinyJit`-wrapped full kernel for CPU / CLANG devices (dot-product identity for both `[N, N]` and `[N, M, N]` passes). |
-| `calculate_sasa_batch_tinygrad(..., block_size=...)` | Per-block `TinyJit` kernel with per-`(block, N, M)` cache; per-block output is detached to numpy on each iteration to dodge TinyJit's persistent output-buffer aliasing (every JIT call wraps the same buffer, so retaining tensors across calls leaks the latest result into earlier ones). Inter-mask is computed inline (no 270 MB upfront realize). |
-| `calculate_sasa_tinygrad_neighbor(..., k_neighbors=64)` | Single TinyJit kernel that uses `Tensor.topk` to keep only the K nearest atoms per row, shrinking the buried-check scratch from `[N, M, N]` to `[N, M, K]` (~80× at K=64). Lossless when K covers the worst-case occlusion-neighbor count; trades scratch for `topk` compute, so on Apple Metal it is **slower** than the blocked kernel — its win is memory headroom on size-constrained devices. |
+| `calculate_sasa_batch_scan(...)` | Same blocked kernel as `calculate_sasa_batch`, dispatched via `jax.lax.scan` so the whole sweep compiles as one program; body is wrappable with `jax.checkpoint` for AlphaFold-style memory-efficient backprop. |
+| `calculate_sasa_jax(coords, vdw_radii, mask, sphere_points, probe_radius=1.4)` | Fully-fused single-pass `@jit` SASA — `[N, M, N]` peak scratch. Emits an `info`/`warning` log (via `_log_single_pass_scratch`) estimating the scratch size so OOMs are obvious. Reached through `JAXExperimentalAdapter(mode="single")`. |
+| `calculate_sasa_batch_tinygrad(..., block_size=...)` | Per-block `TinyJit` kernel with per-`(block, N, M)` cache; per-block output is detached to numpy on each iteration to dodge TinyJit's persistent output-buffer aliasing. Default path on accelerator tinygrad devices via `TinygradAdapter(mode="block")`. |
 
-Every wrapper calls `_log_device_memory(tag)` after realization (JAX paths
-also `block_until_ready()` first so the reading reflects the actual compute).
-The log line is a single `key=value` string — `rss_mb` from `resource.getrusage`
-on any platform, `jax_in_use_mb` / `jax_peak_mb` from
-`jax.devices()[0].memory_stats()` on GPU, `tg_mem_used_mb` from
-`tinygrad.helpers.GlobalCounters.mem_used`. Tags: `jax.sasa.{block,block_soft,
-single,single_soft,scan,scan_soft,neighbor}`, `tinygrad.sasa.{block,single,
-neighbor}`. Enable via `setup_logging("INFO")` or `--verbose` in the CLIs.
+Each wrapper calls `_log_device_memory(tag)` after `block_until_ready()` so
+the reading reflects the actual compute. The log line is a single
+`key=value` string — `rss_mb` from `resource.getrusage` on any platform,
+`jax_in_use_mb` / `jax_peak_mb` from `jax.devices()[0].memory_stats()` on
+GPU. Tags: `jax.sasa.block`, `jax.sasa.scan`, `jax.sasa.single`,
+`tinygrad.sasa.block`. Enable via `setup_logging("INFO")` or `--verbose` in
+the CLIs.
+
+Experimental kernels (`calculate_sasa_jax_soft`, `calculate_sasa_jax_neighbor`,
+`calculate_sasa_batch_soft`, `calculate_sasa_batch_scan_soft`,
+`calculate_sasa_tinygrad`, `calculate_sasa_tinygrad_neighbor`) are
+documented in [EXPERIMENTAL.md §3](EXPERIMENTAL.md).
 
 ### 3.5 Contact analysis — `contacts.py`
 
@@ -295,6 +296,8 @@ protein-affinity-predict <input_path> \
 - Prints a single JSON document combining every structure to stdout.
 - When both `--output-json` and `--output-dir` are set, each structure is also
   written to `<output-dir>/<stem>_results.json`.
+- `--backend tinygrad` lazy-loads the experimental tinygrad adapter; the
+  default-surface backends are `cpu` and `jax`.
 
 ### 4.2 `protein-affinity-benchmark`
 
@@ -302,18 +305,21 @@ protein-affinity-predict <input_path> \
 protein-affinity-benchmark <input_path> \
     [--output-dir benchmarks/output] \
     [--repeats 3] \
-    [--targets cpu cuda tinygrad] \
+    [--targets cpu cuda jax jax-scan] \
     [--selection A,B] \
     [--temperature 25.0] [--distance-cutoff 5.5] \
     [--acc-threshold 0.05] [--sphere-points 100] [--verbose]
 ```
 
-- Runs `repeats` iterations per target per structure, reporting a cold run and
-  the mean of the warm runs.
+- The default harness ([`benchmarks/benchmark.py`](../benchmarks/benchmark.py))
+  runs the `cpu`, `jax` (blocked), and `jax-scan` targets and additionally
+  records peak process RSS and (on GPU) JAX `peak_bytes_in_use` per run.
 - `cuda` is auto-skipped if no GPU/CUDA device is found.
 - Writes `<output-dir>/benchmark_results.json` and echoes the report to stdout.
-- `benchmarks/run.py` is a shim so the harness runs from a source checkout
-  without installing the package.
+- For tinygrad / single-pass / neighbor-cutoff / soft-SASA targets, use the
+  experimental harness in
+  [`benchmarks/benchmark_experimental.py`](../benchmarks/benchmark_experimental.py)
+  (see [EXPERIMENTAL.md §4](EXPERIMENTAL.md)).
 
 ---
 
@@ -360,10 +366,10 @@ Located under [`tests/`](../tests). Common fixture: `benchmarks/fixtures/1A2K.pd
 
 | Test | Scope |
 |------|-------|
-| `test_imports.py` | Top-level re-exports and CLI modules import. |
+| `test_imports.py` | Top-level re-exports and CLI modules import; experimental surface callables. |
 | `test_structure.py` | `load_complex` sanitizes H, water, and non-selected chains. |
 | `test_regression.py` | CPU vs JAX prediction stay within `|ΔΔG| < 0.75` and `|ΔIC| < 10`. Skips if JAX / prodigy-prot / freesasa are missing. |
-| `test_tinygrad_smoke.py` | Tinygrad prediction returns finite ΔG, within `|ΔΔG| < 0.75` and `|ΔIC| < 10` of the CPU reference. |
+| `test_tinygrad_smoke.py` | Tinygrad (experimental) prediction returns finite ΔG, within `|ΔΔG| < 0.75` and `|ΔIC| < 10` of the CPU reference. |
 | `test_benchmark_smoke.py` | Benchmark harness runs with mocked predictor; CUDA is reported as skipped when unavailable. |
 | `test_resources.py` | Packaged `vdw.radii` is accessible via `read_text_resource`. |
 | `test_residue_library.py` | `ResidueLibrary.radii_matrix` has the expected shape. |
@@ -387,8 +393,8 @@ push and pull request.
 
 - Core: `biopython`, `prodigy-prot`, `freesasa`, `numpy>=1.23,<3.0`, `jax`,
   `jaxlib`, `tinygrad`, `matplotlib`, `pandas`. A single
-  `pip install protein-affinity-gpu` brings in every backend and the
-  benchmarking plot stack.
+  `pip install protein-affinity-gpu` brings in every backend (including the
+  experimental tinygrad surface) and the benchmarking plot stack.
 - `[dev]` extra: `build`, `pytest>=8.0`, `ruff>=0.6`.
 
 Build system: **Hatchling**, with the version read dynamically from
@@ -422,11 +428,11 @@ print(target.atom_positions.shape, binder.atom_positions.shape)
 
 cpu = predict(structure, backend="cpu", selection="A,B")
 jax_result = predict(structure, backend="jax", selection="A,B")
-tg_result = predict(structure, backend="tinygrad", selection="A,B")
+jax_scan = predict(structure, backend="jax", selection="A,B", mode="scan")
 
 print(cpu)
-print(f"ΔΔG (CPU vs JAX)      = {cpu.binding_affinity - jax_result.binding_affinity:+.3f}")
-print(f"ΔΔG (CPU vs tinygrad) = {cpu.binding_affinity - tg_result.binding_affinity:+.3f}")
+print(f"ΔΔG (CPU vs JAX block) = {cpu.binding_affinity - jax_result.binding_affinity:+.3f}")
+print(f"ΔΔG (CPU vs JAX scan)  = {cpu.binding_affinity - jax_scan.binding_affinity:+.3f}")
 ```
 
 The `ProdigyResults` returned by any backend serializes to the same JSON

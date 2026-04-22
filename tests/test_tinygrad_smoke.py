@@ -3,7 +3,8 @@ from pathlib import Path
 
 
 def test_tinygrad_prediction_finite_and_close_to_cpu():
-    from protein_affinity_gpu import predict_binding_affinity, predict_binding_affinity_tinygrad
+    from protein_affinity_gpu import predict_binding_affinity
+    from protein_affinity_gpu.experimental import predict_binding_affinity_tinygrad
 
     fixture = Path("benchmarks/fixtures/1A2K.pdb")
     tg_result = predict_binding_affinity_tinygrad(fixture, selection="A,B")

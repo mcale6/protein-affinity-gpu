@@ -1,4 +1,8 @@
-"""Tinygrad ``BackendAdapter`` implementation."""
+"""Tinygrad ``BackendAdapter`` implementation — experimental surface.
+
+The tinygrad pipeline lives on the experimental side; its SASA kernels are
+maintained in :mod:`..sasa_experimental`.
+"""
 from __future__ import annotations
 
 import os
@@ -9,11 +13,10 @@ import numpy as np
 from tinygrad import Device, Tensor
 
 from ..contacts import calculate_residue_contacts_tinygrad
-from ..sasa import (
-    calculate_sasa_batch_tinygrad,
+from ..sasa import calculate_sasa_batch_tinygrad, generate_sphere_points
+from ..sasa_experimental import (
     calculate_sasa_tinygrad,
     calculate_sasa_tinygrad_neighbor,
-    generate_sphere_points,
 )
 from ..scoring import coefficient_tensors_tinygrad
 from ..utils._array import Array

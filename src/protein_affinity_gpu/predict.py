@@ -1,10 +1,13 @@
-"""Unified PRODIGY IC-NIS prediction pipeline.
+"""Unified PRODIGY IC-NIS prediction pipeline — default (CPU + JAX) surface.
 
 One body, two backends. :func:`_run_pipeline` consumes a
 :class:`~.backends.BackendAdapter` and produces :class:`ProdigyResults`;
-backend-specific entry points (``predict_binding_affinity_jax``,
-``predict_binding_affinity_tinygrad``) remain thin shims for the public
-API. :func:`predict_binding_affinity` routes by ``backend`` string.
+the default JAX entry point (:func:`predict_binding_affinity_jax`) is a
+thin shim that constructs :class:`~.backends._jax.JAXAdapter`.
+:func:`predict_binding_affinity` routes ``backend`` to CPU or JAX.
+
+Experimental entry points (tinygrad, soft / single / neighbor JAX) live in
+:mod:`.experimental` so the default surface stays minimal.
 """
 from __future__ import annotations
 
@@ -29,7 +32,7 @@ from .utils.atom14 import compact_complex_atom14, expand_atom14_to_atom37
 from .utils.logging_utils import get_logger, log_duration
 from .utils.structure import load_complex
 
-Backend = Literal["cpu", "jax", "tinygrad"]
+Backend = Literal["cpu", "jax"]
 
 LOGGER = get_logger(__name__)
 _ATOMS_PER_RESIDUE_ATOM14 = 14
@@ -190,9 +193,9 @@ def predict_binding_affinity(
     """Route PRODIGY prediction to the chosen backend.
 
     ``backend="cpu"`` delegates to the reference PRODIGY/freesasa pipeline
-    in :mod:`.cpu`; the GPU backends share the pipeline in :func:`_run_pipeline`.
-    ``backend_kwargs`` flow through to the adapter constructor (e.g.
-    ``soft_sasa=True`` / ``soft_beta=...`` for the JAX adapter).
+    in :mod:`.cpu`; ``backend="jax"`` uses the default :class:`JAXAdapter`
+    (``mode ∈ {"block", "scan"}``). For tinygrad or the soft / single /
+    neighbor JAX kernels, use :mod:`.experimental`.
     """
     if backend == "cpu":
         from .cpu import predict_binding_affinity as cpu_predict
@@ -234,69 +237,20 @@ def predict_binding_affinity_jax(
     save_results: bool = False,
     output_dir: Optional[str | Path] = ".",
     quiet: bool = True,
-    soft_sasa: bool = False,
-    soft_beta: float = 10.0,
-    mode: Literal["block", "single", "scan", "neighbor"] = "block",
-    k_neighbors: int = 64,
+    mode: Literal["block", "scan"] = "block",
 ) -> ProdigyResults:
-    """Run the PRODIGY IC-NIS pipeline on JAX.
+    """Run the PRODIGY IC-NIS pipeline on JAX (default block / scan kernels).
 
-    ``soft_sasa=True`` swaps the hard Shrake–Rupley threshold for a sigmoid of
-    sharpness ``soft_beta`` — meaningful gradients w.r.t. coords / radii at the
-    cost of some accuracy (β→∞ recovers the hard kernel). Intended for
-    training / differentiable design; leave off for straight inference.
-
-    ``mode`` selects the SASA dispatch: ``"block"`` (per-block Python loop —
-    bounded scratch), ``"single"`` (one fused ``@jit``, ``[N, M, N]`` scratch),
-    ``"scan"`` (``jax.lax.scan`` over blocks, AlphaFold-style; pairs with
-    ``jax.checkpoint`` for memory-efficient backprop), or ``"neighbor"``
-    (``lax.top_k`` keeps only the K nearest atoms per row — ``[N, M, K]``
-    scratch, ~80× smaller than ``"single"`` at K=64; inference-only).
+    ``mode="block"`` uses the per-block Python-loop dispatcher (bounded
+    scratch); ``mode="scan"`` compiles the whole blocked sweep as a single
+    ``jax.lax.scan`` program (AlphaFold-style; pairs with ``jax.checkpoint``
+    for memory-efficient backprop). Experimental soft / single / neighbor
+    modes are in :mod:`.experimental`.
     """
     from .backends._jax import JAXAdapter
 
     return _run_pipeline(
-        JAXAdapter(
-            soft_sasa=soft_sasa, soft_beta=soft_beta,
-            mode=mode, k_neighbors=k_neighbors,
-        ),
-        struct_path=struct_path,
-        selection=selection,
-        distance_cutoff=distance_cutoff,
-        acc_threshold=acc_threshold,
-        temperature=temperature,
-        sphere_points=sphere_points,
-        save_results=save_results,
-        output_dir=output_dir,
-        quiet=quiet,
-    )
-
-
-def predict_binding_affinity_tinygrad(
-    struct_path: str | Path,
-    selection: str = "A,B",
-    distance_cutoff: float = 5.5,
-    acc_threshold: float = 0.05,
-    temperature: float = 25.0,
-    sphere_points: int = 100,
-    save_results: bool = False,
-    output_dir: Optional[str | Path] = ".",
-    quiet: bool = True,
-    mode: Literal["block", "single", "neighbor"] = "block",
-    k_neighbors: int = 64,
-) -> ProdigyResults:
-    """Run the PRODIGY IC-NIS pipeline on tinygrad.
-
-    ``mode`` selects the SASA dispatch: ``"block"`` (default) uses the
-    blocked TinyJit kernel, ``"single"`` is the fully-fused kernel,
-    ``"neighbor"`` keeps only the K nearest atoms per row via
-    ``Tensor.topk`` — ~80× scratch reduction at K=64, lossless when
-    K covers the worst-case occlusion neighbor count.
-    """
-    from .backends._tinygrad import TinygradAdapter
-
-    return _run_pipeline(
-        TinygradAdapter(mode=mode, k_neighbors=k_neighbors),
+        JAXAdapter(mode=mode),
         struct_path=struct_path,
         selection=selection,
         distance_cutoff=distance_cutoff,

@@ -14,6 +14,7 @@ MANIFEST="${MANIFEST:-${ROOT_DIR}/benchmarks/datasets/kahraman_2013_t3.tsv}"
 STRUCTURES_DIR="${STRUCTURES_DIR:-${ROOT_DIR}/benchmarks/downloads/kahraman_2013_t3}"
 OUTPUT_DIR="${OUTPUT_DIR:-${ROOT_DIR}/benchmarks/output/kahraman_2013_t3}"
 REPEATS="${REPEATS:-3}"
+BACKENDS="${BACKENDS:-cpu tinygrad-batch tinygrad-single}"
 
 download_file() {
   local url="$1"
@@ -76,11 +77,9 @@ cmd=(
   --structures-dir "${STRUCTURES_DIR}"
   --output-dir "${OUTPUT_DIR}"
   --repeats "${REPEATS}"
+  --backends ${BACKENDS}
+  --verbose
 )
-
-if [[ "${REQUIRE_GPU:-0}" == "1" ]]; then
-  cmd+=(--require-gpu)
-fi
 
 cmd+=("$@")
 "${cmd[@]}"

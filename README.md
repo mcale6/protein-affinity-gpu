@@ -2,6 +2,11 @@
 
 `protein-affinity-gpu` is a research-friendly Python package for protein-protein binding affinity prediction, solvent-accessible surface area (SASA) analysis, and reproducible CPU/JAX benchmarking.
 
+The default surface is CPU + JAX (blocked and `lax.scan`-fused Shrake–Rupley).
+Tinygrad, single-pass / neighbor-cutoff JAX, and differentiable soft-SASA
+live behind `protein_affinity_gpu.experimental` — see
+[docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md).
+
 ## Installation
 
 ```bash
@@ -25,7 +30,11 @@ protein-affinity-predict benchmarks/fixtures --backend tinygrad --output-json
 Run the benchmark harness:
 
 ```bash
+# Default: CPU / JAX (block) / JAX (scan) with memory profiling
 .venv/bin/python benchmarks/benchmark.py benchmarks/fixtures --output-dir benchmarks/output
+
+# Experimental: also covers tinygrad, single-pass, neighbor-cutoff, soft-SASA
+.venv/bin/python benchmarks/benchmark_experimental.py benchmarks/fixtures --output-dir benchmarks/output
 ```
 
 ### `protein-affinity-predict` flags
@@ -56,7 +65,7 @@ the full per-atom JSON to disk.
 | `input_path` | — | File or directory of structures. |
 | `--output-dir` | `benchmarks/output` | Destination for `benchmark_results.json`. |
 | `--repeats` | `3` | Runs per target; first is cold, rest averaged. |
-| `--targets` | `cpu cuda tinygrad` | Subset of `{cpu, cuda, tinygrad}` to benchmark. |
+| `--targets` | `cpu cuda jax jax-scan` | Subset of `{cpu, cuda, jax, jax-scan}` for the default harness. Extended targets (`jax-single`, `jax-neighbor`, `jax-soft`, `tinygrad`, `tinygrad-neighbor`) live in `benchmark_experimental.py`. |
 | `--selection`, `--temperature`, `--distance-cutoff`, `--acc-threshold`, `--sphere-points` | — | Same meaning as `predict`. |
 | `--verbose` | off | `INFO`-level logging. |
 
@@ -73,19 +82,22 @@ from protein_affinity_gpu import (
     predict,
     predict_binding_affinity,
     predict_binding_affinity_jax,
-    predict_binding_affinity_tinygrad,
 )
 
 structure = Path("benchmarks/fixtures/1A2K.pdb")
 target, binder = load_complex(structure, selection="A,B")
 
-# Backend-specific entry points:
+# Default backend-specific entry points:
 cpu_result = predict_binding_affinity(structure, selection="A,B")
-jax_result = predict_binding_affinity_jax(structure, selection="A,B")
-tg_result = predict_binding_affinity_tinygrad(structure, selection="A,B")
+jax_result = predict_binding_affinity_jax(structure, selection="A,B")                # mode="block"
+jax_scan   = predict_binding_affinity_jax(structure, selection="A,B", mode="scan")
 
 # Or route through the unified predictor:
 result = predict(structure, backend="jax", selection="A,B")
+
+# Experimental (tinygrad / single / neighbor / soft) — see docs/EXPERIMENTAL.md:
+from protein_affinity_gpu.experimental import predict_binding_affinity_tinygrad
+tg_result = predict_binding_affinity_tinygrad(structure, selection="A,B")
 ```
 
 ## Result Schema
@@ -127,8 +139,8 @@ Save directly to disk with `results.save_results(output_dir)`.
 | Backend | Entry point | Requires | Device selection |
 |---------|-------------|----------|------------------|
 | CPU (PRODIGY) | `predict_binding_affinity` | `prodigy-prot`, `freesasa` | n/a |
-| JAX | `predict_binding_affinity_jax` | `jax`, `jaxlib` | `jax.default_backend()` |
-| tinygrad | `predict_binding_affinity_tinygrad` | `tinygrad` | `Device.DEFAULT`, override via `TINYGRAD_DEVICE` |
+| JAX | `predict_binding_affinity_jax` (`mode="block"`/`"scan"`) | `jax`, `jaxlib` | `jax.default_backend()` |
+| tinygrad *(experimental)* | `experimental.predict_binding_affinity_tinygrad` | `tinygrad` | `Device.DEFAULT`, override via `TINYGRAD_DEVICE` |
 
 GPU backends share a single pipeline in `protein_affinity_gpu.predict`,
 parametrized by a `BackendAdapter` (see `protein_affinity_gpu.backends`).
@@ -147,8 +159,9 @@ SASA kernel dispatch, and block-size heuristic:
 Force a JAX device with standard JAX environment variables, e.g.
 `JAX_PLATFORMS=cpu` or `JAX_PLATFORMS=cuda`.
 
-The tinygrad backend exposes three SASA kernels via the `mode` kwarg on
-`predict_binding_affinity_tinygrad`:
+The experimental tinygrad backend (imported from
+`protein_affinity_gpu.experimental`) exposes three SASA kernels via the
+`mode` kwarg on `predict_binding_affinity_tinygrad`:
 
 | `mode` | Scratch | When to use |
 |--------|---------|-------------|
@@ -158,7 +171,9 @@ The tinygrad backend exposes three SASA kernels via the `mode` kwarg on
 
 Set `TINYGRAD_DEVICE=CPU|METAL|CUDA` to override device selection. Expect
 ~10–30× the CPU-freesasa wall time on large complexes — tinygrad kernels are
-recompiled on first call and then cached per shape.
+recompiled on first call and then cached per shape. For the full
+experimental surface (including differentiable soft-SASA and the extended
+JAX modes), see [docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md).
 
 ## Benchmark Fixtures
 

@@ -1,7 +1,9 @@
+import csv
 import json
 from pathlib import Path
 
 from benchmarks import compare as compare_cli
+from benchmarks.compare import BackendSpec
 
 
 class DummyResult:
@@ -31,7 +33,7 @@ class DummyResult:
                 "charged": 22.0 + self.offset,
                 "polar": 33.0 + self.offset,
             },
-            "sasa_data": [],
+            "sasa_data": [{"atom_sasa": 1.0 + self.offset}],
         }
 
 
@@ -56,36 +58,48 @@ def test_run_comparison_writes_summary_and_rows(monkeypatch, tmp_path: Path):
     def cpu_predictor(struct_path, **kwargs):
         return DummyResult(Path(struct_path).stem, offset=0.0)
 
-    def jax_predictor(struct_path, **kwargs):
-        return DummyResult(Path(struct_path).stem, offset=0.5)
-
-    def tinygrad_predictor(struct_path, **kwargs):
+    def tinygrad_batch_predictor(struct_path, **kwargs):
         return DummyResult(Path(struct_path).stem, offset=0.2)
 
-    monkeypatch.setattr(compare_cli, "predict_binding_affinity", cpu_predictor)
-    monkeypatch.setattr(compare_cli, "_load_jax_predictor", lambda: jax_predictor)
-    monkeypatch.setattr(compare_cli, "_load_tinygrad_predictor", lambda: tinygrad_predictor)
-    monkeypatch.setattr(compare_cli, "get_jax_backend_name", lambda: "gpu")
-    monkeypatch.setattr(compare_cli, "get_tinygrad_backend_name", lambda: "metal")
+    def tinygrad_single_predictor(struct_path, **kwargs):
+        return DummyResult(Path(struct_path).stem, offset=0.3)
+
+    fake_backends = {
+        "cpu": BackendSpec("cpu", lambda: cpu_predictor, "CPU"),
+        "tinygrad-batch": BackendSpec("tinygrad-batch", lambda: tinygrad_batch_predictor, "TG-B"),
+        "tinygrad-single": BackendSpec("tinygrad-single", lambda: tinygrad_single_predictor, "TG-S"),
+    }
+    monkeypatch.setattr(compare_cli, "BACKENDS", fake_backends)
+    monkeypatch.setattr(compare_cli, "count_atom14_atoms", lambda path, selection: 1234)
 
     rows_path, summary_path, summary = compare_cli.run_comparison(
         manifest_path=manifest,
         structures_dir=structures_dir,
         output_dir=tmp_path / "output",
+        backends=["cpu", "tinygrad-batch", "tinygrad-single"],
         repeats=2,
-        make_plots=False,
+        make_plot=False,
     )
 
     assert rows_path.exists()
     assert summary_path.exists()
-    assert summary["completed_structures"] == 2
-    assert summary["failed_structures"] == 0
-    assert summary["jax_backend"] == "gpu"
-    assert summary["metrics"]["ba_val"]["count"] == 2
-    assert summary["metrics"]["contacts_aa"]["count"] == 2
-    assert summary["timing"]["count"] == 2
+    assert summary["repeats"] == 2
+    assert summary["backends"] == ["cpu", "tinygrad-batch", "tinygrad-single"]
+    for name in ("cpu", "tinygrad-batch", "tinygrad-single"):
+        entry = summary["per_backend"][name]
+        assert entry["completed"] == 2
+        assert entry["failed"] == 0
 
     saved = json.loads(summary_path.read_text())
-    assert saved["completed_structures"] == 2
-    assert "ba_val" in saved["metrics"]
-    assert "contacts_aa" in saved["metrics"]
+    assert saved["per_backend"]["cpu"]["completed"] == 2
+
+    with rows_path.open() as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 2
+    first = rows[0]
+    assert first["cpu_status"] == "ok"
+    assert first["tinygrad-batch_status"] == "ok"
+    assert first["tinygrad-single_status"] == "ok"
+    assert float(first["cpu_ba_val"]) == -10.0
+    assert float(first["tinygrad-batch_contacts_ic"]) == 25.2
+    assert int(first["n_atoms_atom14"]) == 1234

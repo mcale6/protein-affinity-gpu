@@ -1,4 +1,9 @@
-"""JAX ``BackendAdapter`` implementation."""
+"""JAX ``BackendAdapter`` implementation — default block / scan modes only.
+
+Single-pass, neighbor-cutoff and soft (differentiable) SASA kernels live in
+:mod:`..sasa_experimental` and are exposed through
+:class:`..backends._jax_experimental.JAXExperimentalAdapter`.
+"""
 from __future__ import annotations
 
 import subprocess
@@ -13,11 +18,6 @@ from ..contacts import calculate_residue_contacts
 from ..sasa import (
     calculate_sasa_batch,
     calculate_sasa_batch_scan,
-    calculate_sasa_batch_scan_soft,
-    calculate_sasa_batch_soft,
-    calculate_sasa_jax,
-    calculate_sasa_jax_neighbor,
-    calculate_sasa_jax_soft,
     generate_sphere_points,
 )
 from ..scoring import NIS_COEFFICIENTS
@@ -25,40 +25,24 @@ from ..utils._array import Array
 from ..utils.residue_classification import ResidueClassification
 from ..utils.residue_library import default_library as residue_library
 
-SasaMode = Literal["block", "single", "scan", "neighbor"]
+SasaMode = Literal["block", "scan"]
 
 
 class JAXAdapter:
-    """Backend adapter for :mod:`jax`. Supports optional soft-SASA kernel.
+    """Backend adapter for :mod:`jax`.
 
     ``mode`` selects the SASA dispatch strategy:
 
     - ``"block"`` (default) — Python-loop dispatch over a ``@jit``'d per-block
       kernel. Bounded ``[B, M, N]`` scratch; works for any N that fits in RAM.
-    - ``"single"`` — fully-fused single ``@jit``. One XLA program, no Python
-      loop; peak scratch ``[N, M, N]`` so limited by device memory.
-    - ``"scan"`` — same per-block kernel as ``"block"``, dispatched via
-      ``jax.lax.scan`` so the whole sweep compiles as one program. Matches
-      AlphaFold's layer_stack pattern; wrap the scan body with
-      ``jax.checkpoint`` for memory-efficient backprop.
-    - ``"neighbor"`` — single fused ``@jit`` that uses ``lax.top_k`` to keep
-      only the K nearest atoms per row; ``[N, M, K]`` scratch (~80× smaller
-      than ``"single"`` at K=64). Inference-only; ``soft_sasa`` is ignored
-      in this mode because ``top_k`` is not usefully differentiable.
+    - ``"scan"`` — same per-block kernel dispatched via ``jax.lax.scan`` so
+      the whole sweep compiles as one program (AlphaFold ``layer_stack``
+      pattern; wrap the scan body with ``jax.checkpoint`` for memory-efficient
+      backprop).
     """
 
-    def __init__(
-        self,
-        *,
-        soft_sasa: bool = False,
-        soft_beta: float = 10.0,
-        mode: SasaMode = "block",
-        k_neighbors: int = 64,
-    ) -> None:
-        self._soft_sasa = soft_sasa
-        self._soft_beta = soft_beta
+    def __init__(self, *, mode: SasaMode = "block") -> None:
         self._mode = mode
-        self._k_neighbors = k_neighbors
 
     @property
     def name(self) -> str:
@@ -171,16 +155,8 @@ class JAXAdapter:
         sphere_points: Array,
         block_size: int | None,
     ) -> Array:
-        common = dict(coords=coords, vdw_radii=vdw_radii, mask=mask, sphere_points=sphere_points)
-        if self._mode == "neighbor":
-            return calculate_sasa_jax_neighbor(**common, k_neighbors=self._k_neighbors)
-        if self._mode == "single":
-            if self._soft_sasa:
-                return calculate_sasa_jax_soft(**common, beta=self._soft_beta)
-            return calculate_sasa_jax(**common)
-        if self._mode == "scan":
-            sasa_fn = calculate_sasa_batch_scan_soft if self._soft_sasa else calculate_sasa_batch_scan
-        else:
-            sasa_fn = calculate_sasa_batch_soft if self._soft_sasa else calculate_sasa_batch
-        kwargs = {"beta": self._soft_beta} if self._soft_sasa else {}
-        return sasa_fn(block_size=block_size, **common, **kwargs)
+        sasa_fn = calculate_sasa_batch_scan if self._mode == "scan" else calculate_sasa_batch
+        return sasa_fn(
+            coords=coords, vdw_radii=vdw_radii, mask=mask,
+            sphere_points=sphere_points, block_size=block_size,
+        )

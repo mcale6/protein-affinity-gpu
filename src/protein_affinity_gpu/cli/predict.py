@@ -14,13 +14,14 @@ _HEADER_STYLE = "\x1b[1;36m"   # bold cyan
 
 
 def _load_jax_predictor():
-    from ..jax import predict_binding_affinity_jax
+    from ..predict import predict_binding_affinity_jax
 
     return predict_binding_affinity_jax
 
 
 def _load_tinygrad_predictor():
-    from ..tinygrad import predict_binding_affinity_tinygrad
+    # Experimental surface — tinygrad is no longer exposed at the package root.
+    from ..experimental import predict_binding_affinity_tinygrad
 
     return predict_binding_affinity_tinygrad
 
