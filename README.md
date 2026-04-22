@@ -333,16 +333,17 @@ modal setup
   <https://doi.org/10.1371/journal.pone.0008140>. Computes
   solvent-accessible / solvent-excluded / van der Waals surfaces on a
   regular 3D grid via EDT rather than per-atom sphere integration.
-  Another candidate swap-in; not used here because a grid-resolution
-  discretisation with per-grid-cell occlusion tests does not map as
-  cleanly onto the existing `[N_atoms, N_sphere_points]` tensor kernels
-  as Shrake–Rupley.
+  Listed as a candidate swap-in for a future backend — to be explored
+  later.
 - **AlphaFold2** — Jumper, J. et al. *Highly accurate protein structure
   prediction with AlphaFold.* Nature 596, 583–589 (2021).
   <https://doi.org/10.1038/s41586-021-03819-2>. The `atom14` padded
   representation used throughout the JAX / tinygrad kernels and the
-  AFDesign integration in `protein_affinity_gpu.af_design` follow the
-  AlphaFold2 residue layout.
+  AFDesign integration in `protein_affinity_gpu.af_design` is the
+  AlphaFold2 residue layout; the supporting constants in
+  [`src/protein_affinity_gpu/utils/residue_constants.py`](src/protein_affinity_gpu/utils/residue_constants.py)
+  (`restype_atom14_to_atom37`, `restype_name_to_atom14_names`, …) are
+  copied verbatim from DeepMind's Apache-2.0 AlphaFold release.
 - **ColabDesign / AfDesign** — Krypton, S. et al. *ColabDesign:
   Making protein design accessible to all via Google Colab.*
   <https://github.com/sokrypton/ColabDesign>. The `add_ba_val_loss`
