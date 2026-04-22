@@ -207,6 +207,7 @@ def run_afdesign_binder(
         generate_sphere_points,
     )
     from protein_affinity_gpu.utils import residue_constants
+    from protein_affinity_gpu.utils.residue_library import default_library as _residue_library
 
     binder_seq_mode = _normalize_choice(
         "binder_seq_mode",
@@ -278,15 +279,9 @@ def run_afdesign_binder(
     binder_ca_history: list[list[list[float]]] = []
     bsa_history: list[float] = []
 
-    # Element-based VdW radii for each of the 37 atom_types. Matches the
-    # element fallback in ``ResidueLibrary.get_radius``; residue-specific
-    # refinements in vdw.radii are sub-Å² on BSA and not worth the aatype
-    # plumbing for a logging-only metric.
-    _element_radii_tbl = {"N": 1.55, "C": 1.70, "O": 1.52, "S": 1.80}
-    _atom_radii_37 = _np.array(
-        [_element_radii_tbl[name[0]] for name in residue_constants.atom_types],
-        dtype=_np.float32,
-    )
+    _radii_matrix_np = _np.asarray(
+        _residue_library.radii_matrix, dtype=_np.float32
+    )  # [20, 37] per-restype × atom37 VdW radii
     _sphere_points_jnp = jnp.asarray(
         generate_sphere_points(sphere_points), dtype=jnp.float32
     )
@@ -308,10 +303,14 @@ def run_afdesign_binder(
         target_len = total_len - binder_len_effective
         n_atom_types = residue_constants.atom_type_num
 
+        aatype_np = _np.asarray(
+            model._inputs["batch"]["aatype"], dtype=_np.int32
+        )[:total_len]
+        aatype_np = _np.clip(aatype_np, 0, _radii_matrix_np.shape[0] - 1)
+        full_radii = _radii_matrix_np[aatype_np]  # [total_len, 37]
+
         pos_flat = jnp.asarray(atoms.reshape(-1, 3), dtype=jnp.float32)
-        radii_flat = jnp.asarray(
-            _np.tile(_atom_radii_37, total_len), dtype=jnp.float32
-        )
+        radii_flat = jnp.asarray(full_radii.reshape(-1), dtype=jnp.float32)
         mask_complex = jnp.asarray(atom_mask_np.reshape(-1), dtype=jnp.float32)
 
         target_residue_slot = _np.zeros(total_len, dtype=_np.float32)
@@ -409,9 +408,6 @@ def run_afdesign_binder(
             best_aux.get("pae"), target_len_best, binder_len_effective
         )
 
-    # BSA readouts: ``max_bsa`` is the largest interface ever seen across the
-    # trajectory (best-case diagnostic — ColabDesign doesn't track a per-step
-    # BSA-at-best-loss index for us), ``final_bsa`` is the last frame.
     if bsa_history:
         max_bsa = float(max(bsa_history))
         final_bsa = float(bsa_history[-1])
@@ -444,8 +440,6 @@ def run_afdesign_binder(
         if ipsae_value is not None:
             best_metrics["ipSAE"] = ipsae_value
         if max_bsa is not None:
-            # ``bsa`` is the best-of-trajectory interface area — see the
-            # ``max_bsa`` / ``final_bsa`` explainer above.
             best_metrics["bsa"] = max_bsa
             best_metrics["bsa_final"] = final_bsa
 
