@@ -118,28 +118,44 @@ def _dg_kcal_to_kd_m(dg: float) -> float:
 
 
 def load_k81_v106(dataset: str) -> pd.DataFrame:
-    """Load features + CAD (incl. per-atom/per-residue stats) for K81 or V106."""
+    """Load K81 or V106 with uniform (binder-fold) CAD features.
+
+    Switch from the original inter-chain CAD (cadscorelt/) to the uniform
+    binder-fold CAD (cadscorelt_binder/) so the schema matches PB. The
+    interface-specific CAD file is still on disk but not used here.
+    """
     paths = get_paths(dataset)
     feats_csv = (paths.output_root / "pae_calibration/augmented_refit"
                  / "features_msa_only.csv")
-    cad_csv = (paths.output_root / "pae_calibration/cadscorelt"
-               / "cadscore_features_msa_only.csv")
-    cad_arrays = (paths.output_root / "pae_calibration/cadscorelt"
-                  / "cadscore_arrays_msa_only.jsonl")
+    cad_csv = (paths.output_root / "pae_calibration/cadscorelt_binder"
+               / "cadscore_binder_features_msa_only.csv")
+    cad_arrays = (paths.output_root / "pae_calibration/cadscorelt_binder"
+                  / "cadscore_binder_arrays_msa_only.jsonl")
     if not feats_csv.exists():
         raise SystemExit(f"Missing {feats_csv} — run augmented_refit first")
     if not cad_csv.exists():
-        raise SystemExit(f"Missing {cad_csv} — run score_cadscorelt_complex first")
+        raise SystemExit(
+            f"Missing {cad_csv} — run score_cadscorelt_binder_uniform first"
+        )
 
     feats = pd.read_csv(feats_csv)
     cad = pd.read_csv(cad_csv)
+    # feats has the OLD inter-chain CAD columns too; drop them so the
+    # uniform binder-fold CAD from cadscorelt_binder/ is what lands.
+    cad_cols_in_feats = [c for c in feats.columns
+                          if c.startswith(("cad_", "resi_", "atom_",
+                                            "rrc_", "aac_"))]
+    feats = feats.drop(columns=cad_cols_in_feats)
+
     df = feats.merge(cad, on=["pdb_id", "mode"], how="left")
 
     df["dg_exp_kcal_mol"] = df["dg_exp"]
     df["kd_m"] = df["dg_exp"].apply(_dg_kcal_to_kd_m)
     df["log10_kd"] = df["dg_exp"] / RT_LN10_298K
     df["source"] = "Kastritis81" if dataset == "kastritis" else "VrevenBM5.5"
-    df["cad_arrays_jsonl"] = str(cad_arrays.relative_to(ROOT)) if cad_arrays.exists() else ""
+    df["cad_arrays_jsonl"] = (
+        str(cad_arrays.relative_to(ROOT)) if cad_arrays.exists() else ""
+    )
 
     df = df.rename(columns={
         "iptm": "boltz_iptm", "ptm": "boltz_ptm", "plddt": "boltz_plddt",
@@ -167,25 +183,47 @@ def load_proteinbase() -> pd.DataFrame:
     df = df.rename(columns={**PB_IC_MAP, **PB_NIS_MAP, **PB_BOLTZ_MAP, **PB_CAD_MAP})
     df["pdb_id"] = df["proteinbase_id"]
     df["source"] = "ProteinBase"
+    df["mode"] = "msa_only"      # needed for PAE merge key
     df["dg_prodigy_boltz"] = pd.to_numeric(df.get("prodigy_ba_val"),
                                             errors="coerce")
 
     # Merge in local CAD features (binder-fold geometry, single-chain).
-    # Column names match K81/V106's inter-chain CAD schema so the unified
-    # CSV stays consistent — see score_cadscorelt_proteinbase.py for the
-    # semantic caveat (PB = binder fold quality, K81/V106 = interface).
+    # With uniform binder-fold CAD (score_cadscorelt_binder_uniform.py for
+    # K81/V106, score_cadscorelt_proteinbase.py for PB) all 287 complexes
+    # now have identically-computed CAD columns: single-chain comparison
+    # of the reference binder vs Boltz-extracted binder chain, [-min-sep 1]
+    # subselect.
     if local_cad_csv.exists():
         local_cad = pd.read_csv(local_cad_csv)
-        # The local-CAD CSV has a "pdb_id" column populated with proteinbase_id.
-        # Drop overlap cols that already live in df (the 4 global CAD).
-        overlap = [c for c in local_cad.columns
-                   if c in df.columns and c not in ("pdb_id", "mode")]
-        local_cad = local_cad.drop(columns=overlap)
-        df = df.merge(local_cad, left_on="pdb_id", right_on="pdb_id", how="left")
+        # Drop any CAD overlap cols from the base df before merging.
+        cad_cols_in_df = [c for c in df.columns
+                          if c.startswith(("cad_", "resi_", "atom_",
+                                            "rrc_", "aac_"))]
+        df = df.drop(columns=cad_cols_in_df)
+        # PB CAD CSV uses pdb_id = proteinbase_id.
+        df = df.merge(local_cad, left_on="pdb_id", right_on="pdb_id", how="left",
+                       suffixes=("", "_pb_cad"))
         df["cad_arrays_jsonl"] = (str(local_cad_arrays.relative_to(ROOT))
                                    if local_cad_arrays.exists() else "")
     else:
         df["cad_arrays_jsonl"] = ""
+
+    # Merge in PAE features (matching K81/V106 semantics).
+    pae_csv = (ROOT / "benchmarks/output/proteinbase/pae_calibration"
+               / "pae_features.csv")
+    if pae_csv.exists():
+        pae = pd.read_csv(pae_csv)
+        pae = pae.rename(columns={"proteinbase_id": "pdb_id",
+                                    "n_contacts_5p5A": "n_contacts_pae"})
+        df = df.merge(pae[["pdb_id", "mode", "mean_pae_contacts",
+                            "mean_pae_interface"]],
+                       on=["pdb_id", "mode"], how="left",
+                       suffixes=("_old", ""))
+        # If there was a mean_pae_* already (shouldn't be; PB didn't have it),
+        # drop the _old variant.
+        for c in ("mean_pae_contacts_old", "mean_pae_interface_old"):
+            if c in df.columns:
+                df = df.drop(columns=c)
 
     # Affinity: PB ships log10_kd_median (in molar). Derive dg_exp_kcal_mol.
     df["log10_kd"] = pd.to_numeric(df.get("log10_kd_median"), errors="coerce")
@@ -194,9 +232,12 @@ def load_proteinbase() -> pd.DataFrame:
     )
     df["dg_exp_kcal_mol"] = df["log10_kd"] * RT_LN10_298K
 
-    # PB doesn't have inter-chain PAE summaries in these CSVs.
-    df["mean_pae_contacts"] = float("nan")
-    df["mean_pae_interface"] = float("nan")
+    # PAE summaries are populated by the merge above; only set defaults if
+    # the merge didn't run (e.g. PAE CSV missing).
+    if "mean_pae_contacts" not in df.columns:
+        df["mean_pae_contacts"] = float("nan")
+    if "mean_pae_interface" not in df.columns:
+        df["mean_pae_interface"] = float("nan")
     df["n_contacts"] = (
         df[["ic_cc", "ic_ca", "ic_pp", "ic_pa", "ic_aa", "ic_cp"]].sum(axis=1)
     )
@@ -206,35 +247,37 @@ def load_proteinbase() -> pd.DataFrame:
     return df
 
 
-# Common columns emitted in the unified CSV.
+# Common columns emitted in the unified CSV — UNIFORM across all 287 complexes.
+# Every column below is computed identically on K81, V106, and PB.
+# Non-uniform features (pdockq, ipsae, shape_complementarity, irmsd, stratum,
+# etc.) are kept in the raw data but dropped from the regression feature pool.
 UNIFIED_COLS = [
     "pdb_id", "source",
     "dg_exp_kcal_mol", "kd_m", "log10_kd",
+    # Metadata only (NOT features — may be NaN on PB)
     "irmsd", "stratum", "functional_class",
-    # PRODIGY IC+NIS
+    # PRODIGY IC+NIS — uniform (predict_binding_affinity_tinygrad on Boltz CIF)
     "ic_cc", "ic_ca", "ic_pp", "ic_pa", "ic_aa", "ic_cp",
-    "nis_a", "nis_c", "nis_p",
-    "dg_prodigy_boltz",
-    # Boltz confidence
-    "boltz_iptm", "boltz_ptm", "boltz_plddt", "boltz_confidence_score",
-    "boltz_complex_plddt", "boltz_complex_iplddt", "boltz_complex_pde",
-    # PAE summaries (K81/V106)
+    "nis_a", "nis_c",
+    # Boltz confidence — uniform across all 3 datasets
+    "boltz_iptm", "boltz_ptm", "boltz_plddt",
+    # PAE summaries — uniform (inter-chain PAE block; PB filled by
+    # add_pae_features_pb.py)
     "mean_pae_contacts", "mean_pae_interface", "n_contacts",
-    # CAD-score-LT global (all sources)
+    # CAD-score-LT — uniform (single-chain binder-fold: reference_binder vs
+    # Boltz_binder_extracted, [-min-sep 1])
     "cad_rr", "cad_rr_f1", "cad_aa", "cad_aa_f1",
     "cad_rr_target_area", "cad_rr_model_area",
     "cad_rr_tp", "cad_rr_fp", "cad_rr_fn",
-    # CAD local distributions (K81/V106 only; NaN on PB)
     "resi_cad_mean", "resi_cad_std", "resi_cad_min", "resi_cad_max",
     "resi_cad_p10", "resi_cad_p25", "resi_cad_p50", "resi_cad_p75", "resi_cad_p90",
-    "resi_cad_A_mean", "resi_cad_B_mean",
+    "resi_cad_A_mean",
     "resi_cad_frac_below_0_3", "resi_cad_frac_below_0_5",
     "resi_cad_frac_above_0_7", "resi_cad_frac_above_0_9",
     "resi_n_total", "resi_n_false_positive",
     "atom_cad_mean", "atom_cad_std", "atom_cad_min", "atom_cad_max",
     "atom_cad_p10", "atom_cad_p25", "atom_cad_p50", "atom_cad_p75", "atom_cad_p90",
-    "atom_cad_A_mean", "atom_cad_B_mean",
-    "atom_cad_bb_mean", "atom_cad_sc_mean",
+    "atom_cad_A_mean", "atom_cad_bb_mean", "atom_cad_sc_mean",
     "atom_cad_frac_below_0_3", "atom_cad_frac_below_0_5",
     "atom_cad_frac_above_0_7", "atom_cad_frac_above_0_9",
     "atom_n_total", "atom_n_false_positive",
@@ -244,9 +287,6 @@ UNIFIED_COLS = [
     "aac_cad_mean", "aac_cad_std", "aac_cad_p10", "aac_cad_p50", "aac_cad_p90",
     "aac_cad_frac_below_0_3", "aac_cad_frac_above_0_7",
     "aac_n_total", "aac_n_model_only", "aac_n_shared",
-    # ProteinBase extras
-    "pdockq", "pdockq2", "lis", "ipsae", "min_ipsae",
-    "shape_complementarity", "interface_residue_count",
     # Pointer to raw per-atom / per-residue CAD arrays (JSONL)
     "cad_arrays_jsonl",
 ]
