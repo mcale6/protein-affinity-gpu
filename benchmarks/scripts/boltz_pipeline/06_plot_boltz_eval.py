@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""3-panel Boltz evaluation plot (Kastritis 81).
+"""3-panel Boltz evaluation plot (Kastritis 81 or Vreven BM5.5).
 
 Panel 1  Confidence vs truth:
     X = TM-score (Boltz-predicted CIF  vs  crystal PDB; USalign, truth)
@@ -31,11 +31,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import sys
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import pearsonr, spearmanr
+
+sys.path.insert(0, str(Path(__file__).parent))
+from dataset_registry import AVAILABLE, get_paths  # noqa: E402
 
 # Global font bump -- prior version was squished.
 plt.rcParams.update({
@@ -49,9 +53,6 @@ plt.rcParams.update({
 })
 
 ROOT = Path(__file__).resolve().parents[3]
-OUT_ROOT = ROOT / "benchmarks/output/kastritis_81_boltz"
-TM_CSV = OUT_ROOT / "tm_scores.csv"
-PRODIGY_CSV = OUT_ROOT / "prodigy_scores.csv"
 
 MODE_STYLES = {
     "msa_only":     {"color": "#1f77b4", "marker": "o", "label": "Boltz msa_only"},
@@ -202,17 +203,20 @@ def panel_placeholder(ax) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--tm-csv", type=Path, default=TM_CSV)
-    ap.add_argument("--prodigy-csv", type=Path, default=PRODIGY_CSV)
+    ap.add_argument("--dataset", required=True, choices=AVAILABLE)
     args = ap.parse_args()
+    paths = get_paths(args.dataset)
+    out_root = paths.output_root
+    tm_csv = out_root / "tm_scores.csv"
+    prodigy_csv = out_root / "prodigy_scores.csv"
 
-    if not args.tm_csv.exists():
-        print(f"[fatal] missing {args.tm_csv}. Run step 5 first."); return 2
-    if not args.prodigy_csv.exists():
-        print(f"[fatal] missing {args.prodigy_csv}. Run step 5b first."); return 2
+    if not tm_csv.exists():
+        print(f"[fatal] missing {tm_csv}. Run 05_mmalign_tm.py first."); return 2
+    if not prodigy_csv.exists():
+        print(f"[fatal] missing {prodigy_csv}. Run 05b_prodigy_on_boltz.py first."); return 2
 
-    tm_rows = load_rows(args.tm_csv)
-    prodigy_rows = load_rows(args.prodigy_csv)
+    tm_rows = load_rows(tm_csv)
+    prodigy_rows = load_rows(prodigy_csv)
 
     fig, axes = plt.subplots(1, 3, figsize=(24, 9))
     panel_iptm_vs_tm(axes[0], tm_rows)
@@ -222,20 +226,22 @@ def main() -> int:
         y_col="dg_pred_boltz",
         title="2. Standard PRODIGY:  crystal baseline  vs  Boltz-predicted",
         ylabel="ΔG standard PRODIGY  (kcal/mol)\n[see legend for which structure each point is scored on]",
+        include_crystal_baseline=paths.has_prodigy_baseline,
     )
     panel_placeholder(axes[2])
 
     fig.suptitle(
-        "Boltz-2 on Kastritis 81  —  structure (panel 1)  &  affinity (panels 2, 3)",
+        f"Boltz-2 on {paths.display}  —  structure (panel 1)  &  affinity (panels 2, 3)",
         y=0.995,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.97), w_pad=3.0)
-    png = OUT_ROOT / "boltz_eval.png"
-    pdf = OUT_ROOT / "boltz_eval.pdf"
+    png = out_root / "boltz_eval.png"
+    pdf = out_root / "boltz_eval.pdf"
     fig.savefig(png, dpi=180, bbox_inches="tight")
     fig.savefig(pdf, bbox_inches="tight")
-    print(f"Wrote {png.relative_to(ROOT)}")
-    print(f"Wrote {pdf.relative_to(ROOT)}")
+    print(f"[{paths.display}]")
+    print(f"Wrote {png}")
+    print(f"Wrote {pdf}")
     return 0
 
 
