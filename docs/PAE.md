@@ -586,6 +586,117 @@ interaction gain is only visible against the matched stock REFIT
 comparator (+0.037) because the refit itself loses ~0.075 R to
 finite-sample variance on 123 rows × 7 parameters.
 
+---
+
+## Phase 3 — Statistical modelling on unified dataset N=287 (April 2026)
+
+### Why we expanded the benchmark
+
+Two shifts motivate this phase:
+
+1. **Unified dataset**: K81 (81) + V106 (106) + ProteinBase (100) = **287 complexes**
+   with merged feature schema (`benchmarks/output/unified/unified_features.csv`
+   + `.jsonl`). PB contributes 100 kinetic (SPR/BLI) antibody-antigen
+   measurements that extend the cross-domain reach of the calibration.
+2. **Atom-level CAD features**: per-complex CAD-score-LT run with
+   ``record_local_scores=True`` produces 62 new scalar features (per-residue,
+   per-atom, per-contact distribution stats; `resi_cad_*`, `atom_cad_*`,
+   `rrc_*`, `aac_*`) on top of the 4 global CAD columns. K81/V106 have full
+   atom-level CAD; **PB has NaN** on these 62 columns (single-chain fold
+   geometry, not inter-chain) — a known domain gap.
+
+Total feature pool: ~80 numeric features after dropping IDs/labels.
+
+### Three-agent statistical sweep (grouped-by-pdb_id 4-fold CV × 10)
+
+All three agents trained with `GroupKFold` keyed on `pdb_id` to prevent
+leakage from the 64 K81∩V106 overlap. Metrics: Pearson R + bootstrap 95%
+CI, Spearman ρ, RMSE, MAE, calibration plots coloured by source.
+
+| Model | Verdict | CV R ± CI | ΔR vs stock REFIT CV | Top feature |
+|---|---|---|---|---|
+| **Elastic Net with PRODIGY prior** | **HELPS** | 0.493 [0.39, 0.65] | **+0.070** | `atom_cad_frac_above_0_9` (coef −6.52, 88% sign-stable) |
+| **XGBoost residual + SHAP** | **HELPS** | 0.484 ± 0.019 | **+0.059** | `ic_pa × mean_pae_iface` (SHAP 0.666) |
+| PRODIGY + top-3 CAD hybrid | MARGINAL | 0.559 [0.43, 0.68]† | +0.026 | `n_contacts, aac_cad_p50, atom_n_false_positive` |
+
+†Hybrid evaluated on K81+V106 only (N=187) — direct R not comparable to N=287
+agents. ΔR-to-REFIT-CV is the honest comparator.
+
+### Three convergent findings
+
+**(1) Atom-level CAD carries real but modest signal.** Two of three methods
+cross the +0.05 HELPS threshold on ΔR vs stock REFIT CV. The Elastic Net
+coefficient `−6.52 on atom_cad_frac_above_0_9` is both large and 88%
+sign-stable across 40 CV folds — this is the cleanest single-feature win
+the project has produced.
+
+**(2) `ic_pa × mean_pae_iface` beats `ic_pa × ipTM` in SHAP.** The XGBoost
+agent found the PAE-weighted product of polar-apolar contacts at **SHAP
+rank 1** (mean |SHAP| 0.666), with the ipTM-weighted version (our Phase 2
+v2 winner) at rank 4 (0.279, ~2.4× weaker). The direct interface-PAE
+measure dominates the global-ipTM scalar when the model can compare both.
+This refines the Phase 3 af_design port recommendation: use
+`mean_pae_iface` as the confidence-weighting factor, not `ipTM`.
+
+**(3) PB extrapolation collapses for all three models.** Held-out PB
+predictions give R = 0.129 (Elastic Net) / 0.184 (XGBoost) / 0.168
+(Hybrid). PB's 62 atom-level CAD features are NaN (single-chain geometry),
+so the models can't apply their most informative features. Cross-source
+generalisation to PB-style kinetic antibody-antigen data needs
+dataset-specific feature engineering.
+
+### Updated Phase 3 port recommendation
+
+The canonical coefficient for the ΔG-prediction interaction term inside
+`af_design.py`:
+
+```text
+ΔG_pred  =  PRODIGY_6(IC, NIS)  +  c_pa · IC_pa · ⟨PAE⟩_interface  +  Q
+```
+
+where `⟨PAE⟩_interface = mean over inter-chain pairs at the binding
+interface`. Coefficient from the K81+V106 union (N=123) hybrid fit:
+`c_pa ≈ −0.015 to −0.05` depending on the normalisation (kastritis paper
+units or raw PAE). The sign is negative (higher confidence, higher
+absolute effect), consistent with the v2 finding.
+
+**Additionally**: the Elastic Net's winning feature `atom_cad_frac_above_0_9`
+is a standalone "interface quality gate" — not an interaction, but a
+direct geometric measure. In the design loop it could enter as a
+gradient-aware *soft gate* on the contact tensor: only count contacts
+that would yield high local CAD agreement with a reference geometry. But
+this requires reference structures at design time, so it's a Phase 4
+question, not Phase 3.
+
+### Artefact index
+
+All under `benchmarks/output/unified/`:
+
+| Path | Content |
+|---|---|
+| `unified_features.csv` | 287 rows × 101 cols (features + labels + pointer to raw arrays) |
+| `unified_features.jsonl` | Same rows with `extras` (sequences, URLs, paths) |
+| `elasticnet_prior/report.md` | Elastic Net with PRODIGY prior — verdict, coefs, SHAP-style interpretation |
+| `xgboost_residual/report.md` | XGBoost residual + SHAP summary |
+| `xgboost_residual/shap_summary.png` | Top-20 features by mean |SHAP| |
+| `xgboost_residual/shap_interactions.csv` | Top-30 SHAP pair interactions |
+| `prodigy_cad_hybrid/report.md` | Conservative stock-PRODIGY + top-K CAD hybrid |
+
+### Updated scripts index (Phase 3 statistical modelling)
+
+- `benchmarks/scripts/pae_calibration/score_cadscorelt_complex.py` — local
+  CAD stats (per-atom / per-residue / per-contact)
+- `benchmarks/scripts/pae_calibration/build_unified_dataset.py` — merges
+  K81 + V106 + PB into one long CSV + JSONL
+- `benchmarks/scripts/pae_calibration/model_elasticnet_prior.py` — Elastic
+  Net with feature-specific regularisation (2015 stock coefs as prior)
+- `benchmarks/scripts/pae_calibration/model_xgboost_residual.py` — XGBoost
+  on residual from stock PRODIGY with SHAP analysis
+- `benchmarks/scripts/pae_calibration/model_prodigy_cad_hybrid.py` —
+  PRODIGY stock + univariate-ranked top-K CAD features
+
+---
+
 **Interpretation**: Phase 2 v2 establishes that an ipTM-weighted
 `ic_pa` interaction is the single most robust PAE-aware feature in
 the PRODIGY formulation, but:
