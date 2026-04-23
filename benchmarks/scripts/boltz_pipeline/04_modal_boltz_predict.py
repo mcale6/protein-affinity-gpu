@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
-"""Modal Boltz-2 batch runner for the Kastritis 81.
+"""Modal Boltz-2 batch runner — dataset-parameterised.
 
-Two modes per complex (``msa_only``, ``template_msa``). Defaults to a
-2-prediction smoke run (``--limit 1`` x 2 modes); bump ``--limit`` or use
-``--pdb-ids`` to scale.
+Two modes per complex (``msa_only``, ``template_msa``). Supports both
+Kastritis 81 and Vreven BM5.5 via ``--dataset``. Defaults to a 2-prediction
+smoke run (``--limit 1`` x 2 modes); bump ``--limit`` or use ``--pdb-ids``
+to scale.
 
 Example:
     modal run benchmarks/scripts/boltz_pipeline/04_modal_boltz_predict.py \\
-      --limit 1 \\
-      --modes msa_only,template_msa
+      --dataset kastritis --limit 1 --modes msa_only,template_msa
 
     modal run benchmarks/scripts/boltz_pipeline/04_modal_boltz_predict.py \\
-      --pdb-ids 2OOB,3BZD \\
-      --modes msa_only,template_msa
+      --dataset vreven --pdb-ids 1DQJ,2HRK --modes msa_only,template_msa
 
 The function takes YAML text + optional template CIF bytes, writes both to a
 per-job temp dir, runs ``boltz predict --use_msa_server``, and returns the
-output folder as a tarball. --use_msa_server pulls paired + unpaired MSAs
-from the ColabFold MMseqs2 server by default.
+output folder as a tarball. ``--use_msa_server`` pulls paired + unpaired
+MSAs from the ColabFold MMseqs2 server by default.
 
-Outputs land in ``benchmarks/output/kastritis_81_boltz/{mode}/{pdb_id}/`` --
-the tarball's top-level directory is ``{pdb_id}_{mode}`` for clean extract.
+Outputs land in ``<output_root>/{mode}/{pdb_id}_{mode}/`` (output_root
+comes from the dataset registry).
 
 See docs/BOLTZ_PIPELINE.md for the full design.
 """
@@ -132,18 +131,26 @@ def boltz_inference(
     return tar_buf.getvalue()
 
 
-def _local_paths() -> dict[str, Path]:
+def _local_paths(dataset: str) -> dict[str, Path]:
     """Resolve local repo paths. Only called from the local entrypoint --
     NOT at module import time, because Modal imports this script inside its
     container where ``__file__`` has a different parent depth.
+
+    Delegates to the shared ``dataset_registry`` so the Kastritis vs Vreven
+    split lives in one place.
     """
-    root = Path(__file__).resolve().parents[3]
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from dataset_registry import get_paths  # local import (container-safe)
+
+    paths = get_paths(dataset)
     return {
-        "root": root,
-        "manifest_csv": root / "benchmarks/datasets/kastritis_81/manifest.csv",
-        "yaml_root": root / "benchmarks/downloads/kastritis_81_boltz_inputs",
-        "cleaned_dir": root / "benchmarks/downloads/kastritis_81/cleaned",
-        "out_root": root / "benchmarks/output/kastritis_81_boltz",
+        "root": Path(__file__).resolve().parents[3],
+        "manifest_csv": paths.manifest,
+        "yaml_root": paths.yaml_root,
+        "cleaned_dir": paths.cleaned_dir,
+        "out_root": paths.output_root,
+        "display": paths.display,
     }
 
 
@@ -182,12 +189,13 @@ def _load_template_cif(cleaned_dir: Path, pdb_id: str) -> bytes:
 
 @app.local_entrypoint()
 def main(
+    dataset: str = "kastritis",
     limit: int = 1,
     pdb_ids: str = "",
     modes: str = "msa_only,template_msa",
     force_download: bool = False,
 ):
-    paths = _local_paths()
+    paths = _local_paths(dataset)
     rows = _load_manifest(paths["manifest_csv"])
     if not rows:
         print(f"[fatal] manifest is empty: {paths['manifest_csv']}", file=sys.stderr)
@@ -202,6 +210,7 @@ def main(
         if mode not in ("msa_only", "template_msa"):
             raise ValueError(f"unknown mode: {mode!r}")
 
+    print(f"[{paths['display']}]")
     print(f"Selected {len(rows)} complexes x {len(mode_list)} modes "
           f"= {len(rows) * len(mode_list)} predictions")
     for r in rows:

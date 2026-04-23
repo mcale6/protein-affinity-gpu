@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Boltz-2 YAML inputs from the Kastritis 81 manifest.
+"""Build Boltz-2 YAML inputs from a calibration-dataset manifest.
 
 Two YAMLs per complex:
   - ``msa_only/{PDB}.yaml``       -- no templates; pure MSA prediction.
@@ -19,26 +19,23 @@ Template path convention:
   runner writes ``template.cif`` next to the YAML in a per-job temp dir;
   Boltz resolves relative template paths from the YAML's directory.
 
-Inputs
-    benchmarks/datasets/kastritis_81/manifest.csv
-    benchmarks/downloads/kastritis_81/cleaned/{PDB}_AB.pdb
+Usage:
+    python 03_build_boltz_yaml.py --dataset kastritis
+    python 03_build_boltz_yaml.py --dataset vreven
 
-Outputs
-    benchmarks/downloads/kastritis_81/cleaned/{PDB}_AB.cif          (template, per complex)
-    benchmarks/downloads/kastritis_81_boltz_inputs/msa_only/{PDB}.yaml
-    benchmarks/downloads/kastritis_81_boltz_inputs/template_msa/{PDB}.yaml
+Inputs / outputs are resolved via ``dataset_registry.get_paths(<name>)``.
 """
 from __future__ import annotations
 
+import argparse
 import csv
+import sys
 from pathlib import Path
 
 import gemmi
 
-ROOT = Path(__file__).resolve().parents[3]
-MANIFEST_CSV = ROOT / "benchmarks/datasets/kastritis_81/manifest.csv"
-CLEANED_DIR = ROOT / "benchmarks/downloads/kastritis_81/cleaned"
-YAML_ROOT = ROOT / "benchmarks/downloads/kastritis_81_boltz_inputs"
+sys.path.insert(0, str(Path(__file__).parent))
+from dataset_registry import AVAILABLE, get_paths  # noqa: E402
 
 
 def pdb_to_cif(pdb_path: Path, cif_path: Path) -> None:
@@ -96,33 +93,41 @@ def yaml_template_msa(seq_target: str, seq_binder: str) -> str:
 
 
 def main() -> None:
-    rows = list(csv.DictReader(MANIFEST_CSV.open()))
-    if not rows:
-        raise SystemExit(f"manifest empty: {MANIFEST_CSV}")
+    ap = argparse.ArgumentParser(description=__doc__,
+                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dataset", required=True, choices=AVAILABLE,
+                    help="calibration benchmark to build YAMLs for")
+    args = ap.parse_args()
+    paths = get_paths(args.dataset)
 
-    (YAML_ROOT / "msa_only").mkdir(parents=True, exist_ok=True)
-    (YAML_ROOT / "template_msa").mkdir(parents=True, exist_ok=True)
+    rows = list(csv.DictReader(paths.manifest.open()))
+    if not rows:
+        raise SystemExit(f"manifest empty: {paths.manifest}")
+
+    (paths.yaml_root / "msa_only").mkdir(parents=True, exist_ok=True)
+    (paths.yaml_root / "template_msa").mkdir(parents=True, exist_ok=True)
 
     for row in rows:
         pdb_id = row["pdb_id"]
         seq_target = row["seq_target"]
         seq_binder = row["seq_binder"]
 
-        pdb_path = CLEANED_DIR / f"{pdb_id}_AB.pdb"
-        cif_path = CLEANED_DIR / f"{pdb_id}_AB.cif"
+        pdb_path = paths.cleaned_dir / f"{pdb_id}_AB.pdb"
+        cif_path = paths.cleaned_dir / f"{pdb_id}_AB.cif"
         pdb_to_cif(pdb_path, cif_path)
 
-        (YAML_ROOT / "msa_only" / f"{pdb_id}.yaml").write_text(
+        (paths.yaml_root / "msa_only" / f"{pdb_id}.yaml").write_text(
             yaml_msa_only(seq_target, seq_binder)
         )
-        (YAML_ROOT / "template_msa" / f"{pdb_id}.yaml").write_text(
+        (paths.yaml_root / "template_msa" / f"{pdb_id}.yaml").write_text(
             yaml_template_msa(seq_target, seq_binder)
         )
         print(f"[ ok ] {pdb_id}")
 
     print()
-    print(f"Wrote {len(rows)} x 2 YAMLs to {YAML_ROOT.relative_to(ROOT)}")
-    print(f"Wrote {len(rows)} CIFs to {CLEANED_DIR.relative_to(ROOT)}")
+    print(f"[{paths.display}]")
+    print(f"Wrote {len(rows)} x 2 YAMLs to {paths.yaml_root}")
+    print(f"Wrote {len(rows)} CIFs to {paths.cleaned_dir}")
 
 
 if __name__ == "__main__":
