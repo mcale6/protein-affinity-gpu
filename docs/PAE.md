@@ -511,6 +511,97 @@ All under `benchmarks/output/vreven_bm55_boltz/`:
 
 - `benchmarks/scripts/boltz_pipeline/select_best_sample.py` — picks higher-ipTM diffusion rollout per complex
 - `benchmarks/scripts/pae_calibration/interaction_ablation.py` — single-addition ablation, 8 models
+- `benchmarks/scripts/pae_calibration/union_refit.py` — combined K81+V106 refit, extracts candidate coefficients
+
+### Union K81 + V106 — final calibration (N=123)
+
+Combining both benchmarks for maximum statistical power: 64 complexes are
+in both (use V106 features — newer Boltz run with best-ipTM selection),
+17 K81-only (use K81 features), 42 Pierce Ab-Ag only in V106. **Total
+union: 123 complexes.** Strata: 68 rigid / 55 flex.
+
+| Model | R (CV) ± std | R (in-sample) | ΔR vs FIXED |
+|---|---:|---:|---:|
+| stock FIXED (2015) | 0.497 | 0.497 | — |
+| stock REFIT CV | 0.422 ± 0.031 | 0.573 | −0.075 |
+| augmented AIC (9 feats) | 0.451 ± 0.032 | — | −0.046 |
+| interaction AIC (6 feats) | 0.468 ± 0.019 | — | −0.029 |
+| **stock 6 + `ic_pa × ipTM`** | **0.459 ± 0.024** | 0.581 | **−0.038** |
+
+**Ablation on the union:**
+
+| + interaction | R_CV | ΔR vs REFIT |
+|---|---:|---:|
+| `ic_pa × ipTM` | 0.459 | **+0.037** |
+| `ic_pa × ⟨PAE⟩` | 0.454 | +0.032 |
+| `ic_pp × ipTM` | 0.432 | +0.010 |
+| `ic_ca × ipTM` | 0.426 | +0.004 |
+| `ic_cc × ipTM` | 0.426 | +0.004 |
+| `ic_cc × ⟨PAE⟩` | 0.420 | −0.002 |
+
+`ic_pa × ipTM` remains rank 1 on the union — and at the *largest* effect
+size of the three datasets (K81 +0.034, V106 +0.022, union +0.037). With
+N=123 the sparse interaction signal is clearest.
+
+### Candidate `NIS_COEFFICIENTS_PAE` (union-fitted, stored in JSON)
+
+Saved to `benchmarks/output/union_k81_v106/pae_calibration/union_coefficients.json`:
+
+```
+ic_cc         -0.07106   (stock −0.09459)
+ic_ca         -0.05250   (stock −0.10007)
+ic_pp         +0.10127   (stock +0.19577)
+ic_pa         +0.00456   (stock −0.22671)   ← absorbed into interaction
+nis_a         +0.13628   (stock +0.18681)
+nis_c         +0.20460   (stock +0.13810)
+ic_pa × ipTM  −0.13546   (new PAE-aware term)
+intercept    −18.74429   (stock −15.9433)
+```
+
+**The key structural finding**: when the interaction term is added, the
+main-effect `ic_pa` coefficient collapses to near-zero (+0.00456 vs
+stock −0.22671). The signal PRODIGY attributed to "polar–apolar contact
+count" is actually carried by **"polar–apolar contact count weighted by
+prediction confidence"** — `ic_pa` alone contributes nothing once its
+confidence-weighted version is in the model.
+
+### Limit: stock FIXED still wins on absolute R
+
+On the union, no refit variant beats stock FIXED's R=0.497. The 2015
+coefficients — fitted on a disjoint set of 80 crystal complexes — hold
+up better than any refit within our 123 Boltz-featured complexes. The
+interaction gain is only visible against the matched stock REFIT
+comparator (+0.037) because the refit itself loses ~0.075 R to
+finite-sample variance on 123 rows × 7 parameters.
+
+**Interpretation**: Phase 2 v2 establishes that an ipTM-weighted
+`ic_pa` interaction is the single most robust PAE-aware feature in
+the PRODIGY formulation, but:
+
+1. For *production scoring on Boltz-like predictors*, stock FIXED
+   coefficients remain the best choice — they generalise from crystal
+   to Boltz better than any in-sample refit.
+2. For *gradient-based design* (Phase 3 af_design integration), the
+   `ic_pa × ipTM` formulation has two clean properties: (a) it exposes
+   a single interpretable confidence-weighting term without over-
+   parametrising the loss, (b) cross-dataset consistency means the
+   coefficient sign (negative, i.e. high-confidence polar–apolar
+   contacts tighten ΔG) is mechanistically defensible.
+
+### Decision (v2 final)
+
+- **`NIS_COEFFICIENTS_PAE` candidate**: committed to JSON only, *not*
+  wired into `scoring.py`. Prematurely replacing stock coefficients
+  would regress production scoring for negligible gain.
+- **Phase 3 port criterion**: when the differentiable ColabDesign
+  callback is ready, introduce `ic_pa × ipTM` as an additive term with
+  the union-fitted coefficient. Keep `pae_tau` / `pae_beta` knobs from
+  the original Phase 3 design as configurable override for research.
+- **Further work**: re-run the 17 K81-only complexes through the v2
+  Boltz pipeline (diffusion_samples=2 + best-ipTM) to eliminate the
+  within-union Boltz-run heterogeneity; expected to lift the candidate
+  model's CV R by ~0.02. Orthogonal to sourcing AB2 for coverage
+  beyond 123.
 
 ---
 
