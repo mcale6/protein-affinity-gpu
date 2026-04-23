@@ -80,6 +80,30 @@ ATOM14_MAX = 14
 BOLTZ_ROOT = ROOT / "benchmarks/output/kastritis_81_boltz"
 DATASET_JSON = ROOT / "benchmarks/datasets/kastritis_81/dataset.json"
 PRODIGY_CSV = BOLTZ_ROOT / "prodigy_scores.csv"
+DATASET_NAME = "kastritis"                    # set via ``set_dataset()``
+
+
+def set_dataset(name: str) -> None:
+    """Swap the module-level paths/constants to ``kastritis`` or ``vreven``.
+
+    Call this at the start of any script that uses ``load_dataset_truth``,
+    ``load_stock_prodigy``, ``find_cif_and_pae`` or ``load_complex`` before
+    the first load. Idempotent; re-calling with the same name is a no-op.
+
+    Vreven has no ``dataset.json`` — the truth source is the Boltz-ready
+    manifest (``manifest_boltz.csv``). ``load_dataset_truth`` handles both.
+    """
+    global BOLTZ_ROOT, DATASET_JSON, PRODIGY_CSV, DATASET_NAME
+    if name == "kastritis":
+        BOLTZ_ROOT = ROOT / "benchmarks/output/kastritis_81_boltz"
+        DATASET_JSON = ROOT / "benchmarks/datasets/kastritis_81/dataset.json"
+    elif name == "vreven":
+        BOLTZ_ROOT = ROOT / "benchmarks/output/vreven_bm55_boltz"
+        DATASET_JSON = ROOT / "benchmarks/datasets/vreven_bm55/manifest_boltz.csv"
+    else:
+        raise ValueError(f"unknown dataset: {name!r}")
+    PRODIGY_CSV = BOLTZ_ROOT / "prodigy_scores.csv"
+    DATASET_NAME = name
 
 # Standard docking-benchmark iRMSD strata (also used by stratify_pae_calib
 # and threshold_pae_calib to agree on stratum boundaries).
@@ -180,7 +204,47 @@ def find_cif_and_pae(mode: str, pdb_id: str) -> tuple[Path, Path] | None:
 
 
 def load_dataset_truth() -> dict:
-    return json.loads(DATASET_JSON.read_text())
+    """Return ``{pdb_id: {DG, ba_val, iRMSD, nis_a, nis_c, CC, AC, PP, AP, ...}}``.
+
+    Kastritis ships a pre-computed JSON with crystal IC/NIS values. Vreven
+    has only a Boltz-ready manifest; crystal IC/NIS are unavailable so
+    those fields are stubbed with Boltz-mode values from
+    ``prodigy_scores.csv`` (msa_only) as a first approximation — this
+    matches how the downstream scripts use ``nis_a`` / ``nis_c`` as
+    complex-level features rather than literal crystal statistics.
+    """
+    if DATASET_JSON.suffix == ".json":
+        return json.loads(DATASET_JSON.read_text())
+    # Vreven: CSV manifest + Boltz NIS substitution.
+    boltz_nis: dict[str, tuple[float, float]] = {}
+    if PRODIGY_CSV.exists():
+        with PRODIGY_CSV.open() as f:
+            for row in csv.DictReader(f):
+                if row["mode"] != "msa_only":
+                    continue
+                boltz_nis[row["pdb_id"]] = (
+                    float(row["nis_a"]), float(row["nis_c"]),
+                )
+    out: dict = {}
+    with DATASET_JSON.open() as f:
+        for row in csv.DictReader(f):
+            pid = row["pdb_id"]
+            nis = boltz_nis.get(pid, (0.0, 0.0))
+            ba_val_raw = row.get("ba_val_prodigy", "") or ""
+            ba_val = float(ba_val_raw) if ba_val_raw.strip() else float("nan")
+            out[pid] = {
+                "DG": float(row["dg_exp"]),
+                "ba_val": ba_val,
+                "iRMSD": float(row["irmsd"]),
+                "nis_a": nis[0],
+                "nis_c": nis[1],
+                # Crystal IC not available for Vreven without running PRODIGY
+                # on each bound crystal — stub as 0.
+                "CC": 0, "AC": 0, "PP": 0, "AP": 0, "AA": 0, "CP": 0,
+                "Functional_class": row.get("functional_class", ""),
+                "BSA": float(row.get("bsa") or 0) if row.get("bsa") else 0.0,
+            }
+    return out
 
 
 def load_stock_prodigy() -> dict:

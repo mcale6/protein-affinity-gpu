@@ -46,17 +46,15 @@ from scipy.stats import pearsonr  # noqa: E402
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).parent))
 
+import quick_pae_calib as qpc  # noqa: E402
 from quick_pae_calib import (  # noqa: E402
-    BOLTZ_ROOT, classify_ic, classify_stratum, load_complex,
+    classify_ic, classify_stratum, load_complex,
     load_dataset_truth, load_stock_prodigy,
 )
 from diagnostic_refit import (  # noqa: E402
     COEFFS_STOCK, INTERCEPT_STOCK, IRMSD_CUTOFF, R_RMSE, fit_ols,
     kfold_cv_R,
 )
-
-TM_CSV = BOLTZ_ROOT / "tm_scores.csv"
-DATASET_JSON = ROOT / "benchmarks/datasets/kastritis_81/dataset.json"
 
 # All 6 pair types (needed for IC_aa, IC_cp as well as the 4 stock).
 # Indices: 0 = Aliphatic, 1 = Charged, 2 = Polar.
@@ -91,7 +89,8 @@ def classify_ic_full(contacts: np.ndarray, char_t: np.ndarray,
 def load_tm_scalars(mode: str) -> dict[str, dict]:
     """{pdb_id: {iptm, ptm, plddt, confidence_score}}."""
     out = {}
-    with TM_CSV.open() as f:
+    tm_csv = qpc.BOLTZ_ROOT / "tm_scores.csv"
+    with tm_csv.open() as f:
         for row in csv.DictReader(f):
             if row["mode"] != mode:
                 continue
@@ -392,24 +391,38 @@ def plot_scatter(res: dict, out_dir: Path):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dataset", default="kastritis",
+                    choices=["kastritis", "vreven"])
     ap.add_argument("--mode", default="both",
                     choices=["msa_only", "template_msa", "both"])
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args()
 
+    qpc.set_dataset(args.dataset)
+
     out_dir = (Path(args.out_dir) if args.out_dir
-               else BOLTZ_ROOT / "pae_calibration" / "augmented_refit")
+               else qpc.BOLTZ_ROOT / "pae_calibration" / "augmented_refit")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    modes = (["msa_only", "template_msa"] if args.mode == "both"
-             else [args.mode])
+    if args.dataset == "vreven" and args.mode in ("template_msa", "both"):
+        # Vreven was run msa_only×2 only; template_msa predictions absent.
+        print("[note] dataset=vreven has no template_msa run; restricting to msa_only")
+        modes = ["msa_only"]
+    else:
+        modes = (["msa_only", "template_msa"] if args.mode == "both"
+                 else [args.mode])
 
-    truth = json.loads(DATASET_JSON.read_text())
+    truth = load_dataset_truth()
     pdbs = sorted(truth)
     dg_exp_all = np.array([float(truth[p]["DG"]) for p in pdbs])
     ba_val_all = np.array([float(truth[p]["ba_val"]) for p in pdbs])
-    crystal_R, crystal_RMSE = R_RMSE(ba_val_all, dg_exp_all)
-    print(f"[ref] crystal  R={crystal_R:+.3f}  RMSE={crystal_RMSE:.2f}")
+    mask = ~np.isnan(ba_val_all)
+    if mask.sum() >= 3:
+        crystal_R, crystal_RMSE = R_RMSE(ba_val_all[mask], dg_exp_all[mask])
+        print(f"[ref] crystal (N={mask.sum()})  R={crystal_R:+.3f}  RMSE={crystal_RMSE:.2f}")
+    else:
+        crystal_R, crystal_RMSE = float("nan"), float("nan")
+        print(f"[ref] crystal baseline unavailable for {args.dataset}")
 
     results = []
     for mode in modes:

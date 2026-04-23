@@ -40,15 +40,13 @@ import pandas as pd  # noqa: E402
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(Path(__file__).parent))
 
+import quick_pae_calib as qpc  # noqa: E402
+from quick_pae_calib import load_dataset_truth  # noqa: E402
 from diagnostic_refit import (  # noqa: E402
     COEFFS_STOCK, INTERCEPT_STOCK, IRMSD_CUTOFF,
     R_RMSE, fit_ols, kfold_cv_R,
 )
 from augmented_refit import aic_ols, forward_stepwise_aic  # noqa: E402
-
-BOLTZ_ROOT = ROOT / "benchmarks/output/kastritis_81_boltz"
-DATASET_JSON = ROOT / "benchmarks/datasets/kastritis_81/dataset.json"
-AUG_DIR = BOLTZ_ROOT / "pae_calibration/augmented_refit"
 
 STOCK_FEATS = ["ic_cc", "ic_ca", "ic_pp", "ic_pa", "nis_a", "nis_c"]
 IC_FEATS = ["ic_cc", "ic_ca", "ic_pp", "ic_pa"]
@@ -63,10 +61,12 @@ RIDGE_ALPHAS = (0.1, 1.0, 10.0)
 
 def load_features(mode: str) -> pd.DataFrame:
     """Read pre-computed features from augmented_refit (no CIF re-parse)."""
-    p = AUG_DIR / f"features_{mode}.csv"
+    aug_dir = qpc.BOLTZ_ROOT / "pae_calibration" / "augmented_refit"
+    p = aug_dir / f"features_{mode}.csv"
     if not p.exists():
         raise SystemExit(
-            f"Missing {p} — run augmented_refit.py first (it writes this)."
+            f"Missing {p} — run augmented_refit.py --dataset {qpc.DATASET_NAME} "
+            f"--mode {mode} first (it writes this)."
         )
     df = pd.read_csv(p)
     df["nis_a"] = df["nis_a"].clip(lower=0, upper=100)
@@ -618,24 +618,37 @@ def main():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    ap.add_argument("--dataset", default="kastritis",
+                    choices=["kastritis", "vreven"])
     ap.add_argument("--mode", default="both",
                     choices=["msa_only", "template_msa", "both"])
     ap.add_argument("--out-dir", default=None)
     args = ap.parse_args()
 
+    qpc.set_dataset(args.dataset)
+
     out_dir = (Path(args.out_dir) if args.out_dir
-                else BOLTZ_ROOT / "pae_calibration" / "interaction_refit")
+                else qpc.BOLTZ_ROOT / "pae_calibration" / "interaction_refit")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    modes = (["msa_only", "template_msa"] if args.mode == "both"
-              else [args.mode])
+    if args.dataset == "vreven" and args.mode in ("template_msa", "both"):
+        print("[note] dataset=vreven has no template_msa; restricting to msa_only")
+        modes = ["msa_only"]
+    else:
+        modes = (["msa_only", "template_msa"] if args.mode == "both"
+                  else [args.mode])
 
-    truth = json.loads(DATASET_JSON.read_text())
+    truth = load_dataset_truth()
     pdbs = sorted(truth)
     dg_exp_all = np.array([float(truth[p]["DG"]) for p in pdbs])
     ba_val_all = np.array([float(truth[p]["ba_val"]) for p in pdbs])
-    crystal_R, crystal_RMSE = R_RMSE(ba_val_all, dg_exp_all)
-    print(f"[ref] crystal  R={crystal_R:+.3f}  RMSE={crystal_RMSE:.2f}")
+    mask = ~np.isnan(ba_val_all)
+    if mask.sum() >= 3:
+        crystal_R, crystal_RMSE = R_RMSE(ba_val_all[mask], dg_exp_all[mask])
+        print(f"[ref] crystal (N={mask.sum()})  R={crystal_R:+.3f}  RMSE={crystal_RMSE:.2f}")
+    else:
+        crystal_R, crystal_RMSE = float("nan"), float("nan")
+        print(f"[ref] crystal baseline unavailable for {args.dataset}")
 
     results = []
     for mode in modes:
