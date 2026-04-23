@@ -513,57 +513,69 @@ All under `benchmarks/output/vreven_bm55_boltz/`:
 - `benchmarks/scripts/pae_calibration/interaction_ablation.py` — single-addition ablation, 8 models
 - `benchmarks/scripts/pae_calibration/union_refit.py` — combined K81+V106 refit, extracts candidate coefficients
 
-### Union K81 + V106 — final calibration (N=123)
+### Union K81 + V106 — final calibration (N=123, all v2 Boltz)
 
 Combining both benchmarks for maximum statistical power: 64 complexes are
 in both (use V106 features — newer Boltz run with best-ipTM selection),
-17 K81-only (use K81 features), 42 Pierce Ab-Ag only in V106. **Total
-union: 123 complexes.** Strata: 68 rigid / 55 flex.
+17 K81-only (re-run through the v2 Boltz pipeline so the whole union
+uses diffusion_samples=2 + best-ipTM), 42 Pierce Ab-Ag only in V106.
+**Total union: 123 complexes, all v2.** Strata: 68 rigid / 55 flex.
 
 | Model | R (CV) ± std | R (in-sample) | ΔR vs FIXED |
 |---|---:|---:|---:|
-| stock FIXED (2015) | 0.497 | 0.497 | — |
-| stock REFIT CV | 0.422 ± 0.031 | 0.573 | −0.075 |
-| augmented AIC (9 feats) | 0.451 ± 0.032 | — | −0.046 |
-| interaction AIC (6 feats) | 0.468 ± 0.019 | — | −0.029 |
-| **stock 6 + `ic_pa × ipTM`** | **0.459 ± 0.024** | 0.581 | **−0.038** |
+| stock FIXED (2015) | 0.511 | 0.511 | — |
+| stock REFIT CV | 0.431 ± 0.030 | 0.579 | −0.080 |
+| augmented AIC (9 feats) | 0.459 ± 0.032 | — | −0.052 |
+| **interaction AIC (6 feats)** | **0.481 ± 0.025** | — | **−0.030** |
+| stock 6 + `ic_pa × ipTM` | 0.462 ± 0.025 | 0.585 | −0.049 |
 
-**Ablation on the union:**
+Interaction AIC picks **`nis_c, ic_pa × ipTM, ic_ca, nis_a, ic_pp,
+ic_cc × ⟨PAE⟩`**. A *second* interaction (`ic_cc × mean_pae_contacts`)
+survives selection on the v2-refreshed union — it didn't survive on
+the earlier heterogeneous union nor on either dataset alone. Cleaner
+data admits a two-term PAE-aware extension.
+
+**Ablation on the refreshed union:**
 
 | + interaction | R_CV | ΔR vs REFIT |
 |---|---:|---:|
-| `ic_pa × ipTM` | 0.459 | **+0.037** |
-| `ic_pa × ⟨PAE⟩` | 0.454 | +0.032 |
-| `ic_pp × ipTM` | 0.432 | +0.010 |
-| `ic_ca × ipTM` | 0.426 | +0.004 |
-| `ic_cc × ipTM` | 0.426 | +0.004 |
-| `ic_cc × ⟨PAE⟩` | 0.420 | −0.002 |
+| `ic_pa × ipTM` | 0.462 | **+0.030** |
+| `ic_pa × ⟨PAE⟩` | 0.458 | +0.026 |
+| `ic_pp × ipTM` | 0.444 | +0.013 |
+| `ic_pp × ⟨PAE⟩` | 0.435 | +0.004 |
+| `ic_ca × ipTM` | 0.433 | +0.002 |
+| `ic_ca × ⟨PAE⟩` | 0.432 | +0.001 |
+| `ic_cc × ipTM` | 0.429 | −0.002 |
+| `ic_cc × ⟨PAE⟩` | 0.426 | −0.006 |
 
-`ic_pa × ipTM` remains rank 1 on the union — and at the *largest* effect
-size of the three datasets (K81 +0.034, V106 +0.022, union +0.037). With
-N=123 the sparse interaction signal is clearest.
+`ic_pa × ipTM` remains rank 1 across all three cuts (K81 +0.034,
+V106 +0.022, union-v2 +0.030). Effect sizes are slightly *smaller*
+than the pre-refresh union (+0.037 → +0.030) because the v2 Boltz
+refresh of the 17 K81-only complexes lifted every baseline by
+~+0.014 R — the refresh mostly helped stock FIXED and stock REFIT
+equally, narrowing the interaction gap while keeping the ranking.
 
-### Candidate `NIS_COEFFICIENTS_PAE` (union-fitted, stored in JSON)
+### Candidate `NIS_COEFFICIENTS_PAE` (union-v2-fitted, stored in JSON)
 
 Saved to `benchmarks/output/union_k81_v106/pae_calibration/union_coefficients.json`:
 
 ```
-ic_cc         -0.07106   (stock −0.09459)
-ic_ca         -0.05250   (stock −0.10007)
-ic_pp         +0.10127   (stock +0.19577)
-ic_pa         +0.00456   (stock −0.22671)   ← absorbed into interaction
-nis_a         +0.13628   (stock +0.18681)
-nis_c         +0.20460   (stock +0.13810)
-ic_pa × ipTM  −0.13546   (new PAE-aware term)
-intercept    −18.74429   (stock −15.9433)
+ic_cc         -0.07806   (stock −0.09459)
+ic_ca         -0.05722   (stock −0.10007)
+ic_pp         +0.10743   (stock +0.19577)
+ic_pa         -0.01331   (stock −0.22671)   ← absorbed into interaction
+nis_a         +0.13702   (stock +0.18681)
+nis_c         +0.20254   (stock +0.13810)
+ic_pa × ipTM  −0.12222   (new PAE-aware term)
+intercept    −18.49311   (stock −15.9433)
 ```
 
 **The key structural finding**: when the interaction term is added, the
-main-effect `ic_pa` coefficient collapses to near-zero (+0.00456 vs
-stock −0.22671). The signal PRODIGY attributed to "polar–apolar contact
-count" is actually carried by **"polar–apolar contact count weighted by
-prediction confidence"** — `ic_pa` alone contributes nothing once its
-confidence-weighted version is in the model.
+main-effect `ic_pa` coefficient collapses from stock −0.22671 to
+−0.01331 — near zero. The signal PRODIGY attributed to "polar–apolar
+contact count" is actually carried by **"polar–apolar contact count
+weighted by prediction confidence"** — `ic_pa` alone contributes
+nothing once its confidence-weighted version is in the model.
 
 ### Limit: stock FIXED still wins on absolute R
 
