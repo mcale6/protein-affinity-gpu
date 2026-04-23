@@ -151,6 +151,10 @@ def load_k81_v106(dataset: str) -> pd.DataFrame:
 def load_proteinbase() -> pd.DataFrame:
     prod_csv = ROOT / "benchmarks/output/proteinbase/prodigy_tinygrad_scores.csv"
     cad_csv = ROOT / "benchmarks/output/proteinbase/proteinbase_kd_boltz_pae_cadscorelt.csv"
+    local_cad_csv = (ROOT / "benchmarks/output/proteinbase/pae_calibration"
+                     / "cadscorelt/cadscore_features_msa_only.csv")
+    local_cad_arrays = (ROOT / "benchmarks/output/proteinbase/pae_calibration"
+                        / "cadscorelt/cadscore_arrays_msa_only.jsonl")
     if not prod_csv.exists():
         raise SystemExit(f"Missing {prod_csv}")
     if not cad_csv.exists():
@@ -158,7 +162,6 @@ def load_proteinbase() -> pd.DataFrame:
 
     prod = pd.read_csv(prod_csv)
     cad = pd.read_csv(cad_csv)
-    # Prefer CAD CSV as the base (has all Boltz confidence scalars, sequences, etc.).
     df = cad.merge(prod, on="proteinbase_id", how="left", suffixes=("", "_prod"))
 
     df = df.rename(columns={**PB_IC_MAP, **PB_NIS_MAP, **PB_BOLTZ_MAP, **PB_CAD_MAP})
@@ -166,6 +169,23 @@ def load_proteinbase() -> pd.DataFrame:
     df["source"] = "ProteinBase"
     df["dg_prodigy_boltz"] = pd.to_numeric(df.get("prodigy_ba_val"),
                                             errors="coerce")
+
+    # Merge in local CAD features (binder-fold geometry, single-chain).
+    # Column names match K81/V106's inter-chain CAD schema so the unified
+    # CSV stays consistent — see score_cadscorelt_proteinbase.py for the
+    # semantic caveat (PB = binder fold quality, K81/V106 = interface).
+    if local_cad_csv.exists():
+        local_cad = pd.read_csv(local_cad_csv)
+        # The local-CAD CSV has a "pdb_id" column populated with proteinbase_id.
+        # Drop overlap cols that already live in df (the 4 global CAD).
+        overlap = [c for c in local_cad.columns
+                   if c in df.columns and c not in ("pdb_id", "mode")]
+        local_cad = local_cad.drop(columns=overlap)
+        df = df.merge(local_cad, left_on="pdb_id", right_on="pdb_id", how="left")
+        df["cad_arrays_jsonl"] = (str(local_cad_arrays.relative_to(ROOT))
+                                   if local_cad_arrays.exists() else "")
+    else:
+        df["cad_arrays_jsonl"] = ""
 
     # Affinity: PB ships log10_kd_median (in molar). Derive dg_exp_kcal_mol.
     df["log10_kd"] = pd.to_numeric(df.get("log10_kd_median"), errors="coerce")

@@ -645,6 +645,42 @@ so the models can't apply their most informative features. Cross-source
 generalisation to PB-style kinetic antibody-antigen data needs
 dataset-specific feature engineering.
 
+### PB gap closed — `score_cadscorelt_proteinbase.py`
+
+`benchmarks/scripts/pae_calibration/score_cadscorelt_proteinbase.py` runs
+the same local-CAD extraction on PB's native single-chain comparison
+(ESMFold binder-only vs Boltz binder chain). The 62-feature schema now
+populates on all 287 complexes; PB rows have the same columns with
+*binder-fold* (not interface) semantics. Univariate PB signal on the
+new CAD features vs `log10_kd` (N=100):
+
+| Feature | Pearson | Spearman |
+|---|---:|---:|
+| `aac_cad_p50` | +0.506 | +0.512 |
+| `atom_cad_bb_mean` | +0.497 | +0.530 |
+| `aac_cad_mean` | +0.495 | +0.527 |
+| `atom_cad_frac_above_0_9` | +0.465 | +0.479 |
+| `atom_cad_frac_below_0_5` | −0.433 | −0.472 |
+
+Positive sign is mechanistically consistent: **higher binder-fold CAD
+(ESMFold agrees with Boltz-in-complex) → more rigid-body binding → higher
+log10_Kd (weaker affinity).** Induced-fit binders change conformation on
+binding (lower CAD) and tend to be stronger.
+
+Coverage after the PB CAD fill:
+
+| Feature | K81 | V106 | PB |
+|---|---:|---:|---:|
+| `atom_cad_frac_above_0_9` | 81/81 | 106/106 | **100/100** |
+| `aac_cad_p50` | 81/81 | 106/106 | **100/100** |
+| `resi_cad_mean` | 81/81 | 106/106 | **100/100** |
+
+**Caveat**: PB's CAD measures binder-fold similarity (single-chain);
+K81/V106's CAD measures interface similarity (inter-chain complex vs
+crystal). Same column name, different scope. Both are "how trustworthy
+is the region that matters for affinity" but consumers should check the
+`source` column when attributing mechanism.
+
 ### Updated Phase 3 port recommendation
 
 The canonical coefficient for the ΔG-prediction interaction term inside
