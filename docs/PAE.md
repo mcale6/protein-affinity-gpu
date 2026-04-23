@@ -56,49 +56,311 @@ consumes PAE.
 
 ---
 
-## Phase 2 — Calibration workflow (next)
+## Phase 2 — Calibration workflow (in progress, April 2026)
 
-**Inputs.**
+**Inputs now on disk.** Kastritis 81 Boltz-2 prediction batch (81 × 2 modes)
+landed in commit `6803718`:
 
-| Artefact | Source | Notes |
+| Artefact | Path |
+|---|---|
+| Crystal PDBs | `benchmarks/downloads/kastritis_81/*.pdb` (81) |
+| Crystal IC counts + ΔG_exp + `ba_val` | `benchmarks/datasets/kastritis_81/dataset.json` |
+| Boltz-2 predicted CIF | `benchmarks/output/kastritis_81_boltz/{mode}/{pdb}_{mode}/boltz_results_input/predictions/input/input_model_0.cif` |
+| Boltz-2 PAE (full matrix) | `…/pae_input_model_0.npz[pae]` (float32, `[L_total, L_total]`) |
+| Stock PRODIGY on Boltz CIFs | `benchmarks/output/kastritis_81_boltz/prodigy_scores.csv` |
+| ipTM / pTM / pLDDT | `benchmarks/output/kastritis_81_boltz/tm_scores.csv` |
+
+**Baseline numbers to beat** (from the Boltz pipeline README):
+
+| Config | Pearson R | RMSE (kcal/mol) |
 |---|---|---|
-| Crystal PDB | Kastritis 2011 Affinity Benchmark v2 (81 complexes) | Prodigy's original set |
-| Experimental ΔG (kcal/mol) | Same | Ground truth |
-| Predicted structure + PAE | AF2-Multimer (run **outside** this repo, standard structure prediction) | Used as the PAE source — this is where the predicted PPI geometry comes from |
-| Optional superset | Vreven 2015 Affinity Benchmark v5.5 (207) | For rigid/medium/flexible stratification |
+| Crystal (`ba_val` vs `DG`) | 0.74 | 1.88 |
+| Boltz `msa_only`, stock PRODIGY | 0.62 | 2.29 |
+| Boltz `template+msa`, stock PRODIGY | 0.67 | 2.10 |
 
-**Protocol.**
+The PAE-aware PRODIGY job is to close that 0.07–0.12 Pearson / 0.2–0.4 kcal
+gap without reintroducing the crystal (i.e. using only AF-predicted geometry
+and PAE).
 
-For each complex `(pdb, dG_exp)`:
+### Parametrisation — linear-α additive gate
 
-1. Load crystal PDB → run stock PRODIGY → `dG_crystal` (literature baseline).
-2. Load predicted structure + PAE → run stock PRODIGY → `dG_pred_nopae`
-   (measures PDB→AF drift without PAE correction).
-3. Load predicted structure + PAE → run PRODIGY with `contacts_pae` swapped
-   in → `dG_pred_pae` (the experiment).
+The `contacts_pae` module ships two hard gates (`confidence`, `pessimistic`).
+For calibration we **generalise to a single scalar** α:
 
-Evaluate:
+```text
+contact_ij  =  1( min_heavy_atom_dist_ij  +  α · PAE_ij  ≤  d_cut )
+```
 
-- Pearson R and RMSE (kcal/mol) vs. `dG_exp` for each of the three.
-- Per-complex residuals — expect `dG_pred_pae` to narrow the gap vs.
-  `dG_pred_nopae`, particularly on the **flexible** subset.
-- Sweep `pae_cutoff τ ∈ {5, 10, 15} Å`.
-- Ablate `gate_mode ∈ {confidence, pessimistic}`.
+| α | Meaning |
+|---|---|
+| `α = 0` | Recovers stock PRODIGY (α=0 is the ablation — PAE completely ignored) |
+| `α = 1` | Recovers `pessimistic` mode (structuremap-literal additive gate) |
+| `α ∈ (0, 1)` | Partial penalty — how we tune it |
 
-**Coefficient refit.** Once gated contacts produce sensible intermediate
-values, refit the 6 IC-NIS coefficients on the Kastritis 81 with leave-one-out
-cross-validation. Park new coefficients next to `NIS_COEFFICIENTS` in
-`scoring.py` as e.g. `NIS_COEFFICIENTS_PAE`.
+`d_cut` is **fixed at 5.5 Å** (PRODIGY's published value) for the first
+iteration; the degree of freedom to sweep is α alone.
 
-**What's missing in this repo for Phase 2:**
-- The Kastritis 81 PDB list + ΔG CSV. Likely source:
-  [HADDOCK Affinity Benchmark v2](https://bmm.crick.ac.uk/~bmmadmin/Affinity/).
-- An AF2-Multimer prediction batch. Structure prediction is **external** to
-  this repo — any standard pipeline (ColabFold, AlphaPulldown, local
-  AlphaFold-Multimer, AF3 server) produces the needed CIF + PAE JSON, which
-  `contacts_pae.load_pae_json` will consume.
-- A calibration driver (notebook or script) that loops over the benchmark and
-  runs the three-way comparison above.
+### Two-stage calibration
+
+| Stage | Loss | Target | What it tests |
+|---|---|---|---|
+| **A. Match PDB** | `Σ_pdb Σ_chan (IC_pae(α) − IC_crystal)²` | Crystal IC counts (CC, AC, PP, AP) from `dataset.json` | Does PAE erase Boltz-specific contacts so that IC matches the crystal? Pure structural, no ΔG noise. |
+| **B. Match ΔG_exp** | LOO-CV `{Pearson R, RMSE, MAE}` vs `DG` | Experimental ΔG from `dataset.json` | Does the better-matched IC also predict binding affinity better? Reported in two flavours: (B1) fixed stock PRODIGY coeffs, (B2) LOO-refit 6 coeffs per α. |
+
+**Bootstrap** (n=500 resamples over the 81 complexes) gives 95% CIs on α\*,
+R, and RMSE at the best config.
+
+### Permutation null (make-or-break sanity check)
+
+Shuffle the 81 PAE matrices across `pdb_id` (each PAE keeps its shape and
+values, just gets reassigned to a different complex). Re-run Stages A and B
+on the shuffled data. If the shuffled gate also dips → PAE is just a generic
+contact-count modulator, not an AF-confidence-specific filter. The
+permutation p-value is the key number for claiming "PAE helps".
+
+### Data flow wireframe
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  INPUTS                                                          │
+│                                                                  │
+│  benchmarks/datasets/kastritis_81/dataset.json                   │
+│    ↳ per pdb: CC, AC, PP, AP          (crystal IC counts)        │
+│               DG                      (experimental ΔG)          │
+│               ba_val                  (PRODIGY-on-crystal ΔG)    │
+│               nis_a, nis_c            (NIS, reused from crystal) │
+│                                                                  │
+│  benchmarks/output/kastritis_81_boltz/msa_only/{pdb}_msa_only/   │
+│    boltz_results_input/predictions/input/                        │
+│      ↳ input_model_0.cif              (Boltz structure)          │
+│      ↳ pae_input_model_0.npz[pae]     (full PAE matrix)          │
+└──────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  PARSE (per complex)                                             │
+│                                                                  │
+│    CIF → pos[N, 14, 3], mask[N, 14], chars[N] (A/C/P)            │
+│    PAE → slice_pae_inter → pae_ab[N_t, N_b]                      │
+│                                                                  │
+│  Atom14 convention = all heavy atoms for standard AAs.           │
+│  Sanity check: at α=0, recomputed IC must match                  │
+│  prodigy_scores.csv within tol (otherwise atom14 mismatch).      │
+└──────────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  LINEAR-α GATE — SWEEP                                           │
+│                                                                  │
+│    contact_ij = 1( min_heavy_dist_ij + α·PAE_ij ≤ 5.5 )          │
+│    for α ∈ linspace(0, 1.5, 16)                                  │
+│                                                                  │
+│    classify → IC_cc, IC_ca, IC_pp, IC_pa (per complex, per α)    │
+└──────────────────────────────────────────────────────────────────┘
+                          │
+          ┌───────────────┼───────────────┐
+          ▼               ▼               ▼
+ ┌───────────────┐ ┌───────────────┐ ┌───────────────┐
+ │ Stage A       │ │ Stage B       │ │ Permutation   │
+ │ match PDB     │ │ match ΔG_exp  │ │ null          │
+ │               │ │               │ │ shuffle PAE   │
+ │ L_A(α) =      │ │ B1 fixed coef │ │ across pdb    │
+ │  Σ(IC_pae −   │ │ B2 LOO refit  │ │ re-run A & B  │
+ │   IC_crystal)²│ │ R + RMSE + MAE│ │ report p      │
+ └───────┬───────┘ └───────┬───────┘ └───────┬───────┘
+         │                 │                 │
+         └─────────── bootstrap (n=500) ─────┘
+                          │
+                          ▼
+┌──────────────────────────────────────────────────────────────────┐
+│  OUTPUTS                                                         │
+│                                                                  │
+│  results/calib_grid.csv      (long: pdb, α, IC counts, dg)       │
+│  results/stage_A_ic.png      (2 panels: L_A(α) + per-channel)    │
+│  results/stage_B_dg.png      (2 panels: fixed / LOO-refit R+RMSE)│
+│  results/scatter_best.png    (3 panels: crystal, stock, PAE)     │
+│  results/null_perm.png       (2 panels: curves + permutation p)  │
+│  results/summary.md          (comparison table with 95% CIs)     │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Locked-in decisions (April 2026)
+
+1. **Mode:** `msa_only` only for first iteration (not `template_msa`).
+   Rationale: larger drift from crystal → larger PAE signal, cleaner test.
+   Easy to toggle via `--mode` flag.
+2. **`d_cut` fixed at 5.5 Å.** Two-parameter sweep (α, d_cut) gave a heatmap;
+   the 1-parameter sweep gives a legible curve. Revisit in iteration 2 if
+   α\* near grid edge.
+3. **Coefficients:** report both (B1) fixed PRODIGY and (B2) LOO-refit side
+   by side. Fixed is the conservative claim; refit is the upper bound.
+4. **`calculate_residue_contacts_pae` is the reference impl,** but the
+   calibration driver has its own vectorised NumPy path — no JAX/tinygrad
+   dependency, for iteration speed.
+
+### Driver
+
+- `benchmarks/scripts/pae_calibration/quick_pae_calib.py` — single-file
+  calibration driver, NumPy / pandas / SciPy / Matplotlib only.
+- Usage: `python quick_pae_calib.py --mode msa_only [--limit N] [--bootstrap 500]`.
+- Atom14-vs-heavy-atom parity is asserted at α=0 via diff vs
+  `prodigy_scores.csv` (warning, not fatal).
+
+**What's missing once this lands:**
+- Refit coefficients (the winning α\*+coeffs from Stage B2) should be parked
+  next to `NIS_COEFFICIENTS` in `scoring.py` as e.g. `NIS_COEFFICIENTS_PAE_MSA_ONLY`.
+- Repeat for `template_msa` → `NIS_COEFFICIENTS_PAE_TEMPLATE_MSA` once
+  iteration 1 shows a real effect.
+- Validation on Vreven v5.5 (207) — held-out set to check for overfitting
+  to Kastritis 81.
+
+---
+
+## Phase 2 v1 results — null result on Kastritis 81 (April 2026)
+
+### The question we answered
+
+> Does AlphaFold/Boltz PAE carry enough signal on Kastritis 81 to close the
+> crystal→Boltz PRODIGY R gap (0.74 → 0.62)?
+
+**Answer: no.** Four independent reparametrisations all saturate at R ≈ 0.63
+(msa_only) / 0.67 (template_msa). The gap is a uniform feature-distribution
+shift, not a PAE-recoverable signal.
+
+### Baseline numbers
+
+| Config | R (N=81) | RMSE (kcal/mol) |
+|---|---:|---:|
+| Crystal (`ba_val` vs `DG`) | 0.737 | 1.88 |
+| Boltz msa_only, stock PRODIGY | 0.615 | 2.29 |
+| Boltz template_msa, stock PRODIGY | 0.666 | 2.10 |
+| Paper published (4-fold CV × 10 on crystal) | −0.73 | 1.89 |
+
+### Flexibility stratification — two conventions, different pictures
+
+The paper's flexibility cutoff is **iRMSD > 1.0 Å**, which splits Kastritis
+81 into 41 rigid / 40 flexible. The Vreven v5.5 convention (iRMSD > 2.2 Å)
+would put only 6 complexes in the flexible bin — too few to resolve.
+
+| Mode | Stratum | N | FIXED R | REFIT 4-fold CV R |
+|---|---|---:|---:|---:|
+| msa_only | rigid | 41 | 0.633 | 0.574 |
+| msa_only | flex | 40 | 0.603 | 0.443 |
+| template_msa | rigid | 41 | 0.673 | 0.615 |
+| template_msa | flex | 40 | 0.667 | 0.544 |
+
+**The R gap is uniform across rigid / flex**, not flexibility-localised.
+This contradicts the PAE hypothesis that gating should help most where
+flexibility is high.
+
+### Parametrisation strategies tested
+
+| # | Form | Free params | Script | Result |
+|---|---|---|---|---|
+| 1 | Linear-α gate `1(d + α·PAE ≤ d_cut)` | α, d_cut | `quick_pae_calib.py` | α\* = 0, d\* = 5.5 (stock); monotone degradation away |
+| 2 | Threshold-τ gate `1(d≤5.5) ∧ (PAE≤τ)` | τ | `threshold_pae_calib.py` | τ\* = ∞ (stock); aggregate R monotone in τ |
+| 3 | Diagnostic refit (6 stock features) | 7 (6 coefs + intercept) | `diagnostic_refit.py` | In-sample R = FIXED + 0.01; 4-fold CV R *worse* than FIXED |
+| 4 | Augmented AIC (13 candidate features) | AIC-selected | `augmented_refit.py` | No PAE/ipTM/pLDDT feature selected |
+
+Candidate pool for (4): 6 stock + `ic_aa, ic_cp` + `ipTM, pTM, pLDDT, confidence_score` + `mean_PAE_contacts, mean_PAE_interface` + `n_contacts`. Stepwise AIC selected 5 features on each mode; **no PAE-derived feature survived selection**.
+
+### Figures (per run outputs)
+
+All under `benchmarks/output/kastritis_81_boltz/pae_calibration/`.
+
+| Path | Content |
+|---|---|
+| `msa_only/stage_A_ic.png` | Stage A IC-mismatch heatmap (α, d_cut). Minimum at stock corner. |
+| `msa_only/stage_B_dg.png` | Stage B R + RMSE heatmaps, both coef policies. |
+| `msa_only/scatter_best.png` | 3-panel crystal / stock / PAE-best scatter (best ≡ stock). |
+| `msa_only/null_perm.png` | Permutation null: real vs shuffled PAE. |
+| `msa_only/threshold/stage_B_curve.png` | Threshold-τ 1D R/RMSE curves. |
+| `msa_only/threshold/stratified_R_curve.png` | R vs τ, by iRMSD stratum. |
+| `msa_only/stratified_heatmaps.png` | R/RMSE heatmaps per stratum (rigid/medium/flex). |
+| `diagnostic_refit/refit_scatter_*.png` | FIXED vs 4-fold-CV refit scatter, both modes. |
+| `augmented_refit/augmented_scatter_*.png` | Augmented-AIC vs stock scatter, both modes. |
+
+### Interpretation
+
+- Kastritis 81 is dominated by rigid, well-resolved complexes where Boltz
+  already produces accurate structures. Interface PAE is low almost
+  everywhere — gating (pessimistic or optimistic) barely modifies the
+  contact set.
+- The 6-complex Vreven-cutoff flexible subset shows a soft positive trend
+  under threshold-τ gating (R flips from −0.16 at τ=∞ to +0.44 at τ=12).
+  Bootstrap 95% CI: [−0.77, +0.99]. Cannot reject noise.
+- The residual crystal→Boltz R gap is a *uniform feature-distribution
+  shift*, not a flexibility-dependent effect. No PAE-derived feature
+  survived AIC selection; neither did any global confidence scalar.
+
+### Decision
+
+- Kastritis 81 **cannot validate or refute PAE-aware PRODIGY** at a useful
+  effect size. Defer validation to Vreven v5.5 (207 complexes, explicit
+  rigid/medium/flexible/difficult strata; balanced N).
+- All scripts under `benchmarks/scripts/pae_calibration/` apply unchanged
+  once Vreven Boltz predictions land.
+- Phase 3 (design-loop PAE gate) remains deferred pending positive Phase 2
+  signal on a suitable benchmark.
+
+### Scripts index
+
+- `quick_pae_calib.py` — linear-α, 2D α × d_cut sweep
+- `threshold_pae_calib.py` — threshold-τ sweep with stratification
+- `stratify_pae_calib.py` — post-hoc stratification on calib_grid.csv
+- `diagnostic_refit.py` — refit 6 stock features, 4-fold CV × 10 repeats
+- `augmented_refit.py` — 13-feature candidate pool, stepwise AIC
+
+---
+
+## Phase 2 v1.1 — three parallel reparametrisations (April 2026)
+
+After the v1 null, three conceptually distinct reparametrisations were tested in parallel (worktree-isolated agents) to probe directions the v1 battery didn't cover:
+
+| # | Idea | Script | Rationale |
+|---|---|---|---|
+| A | Entropy surrogate: add `c · ⟨PAE⟩_contacts` to stock PRODIGY with sign-constrained `c ≥ 0` | `entropy_surrogate.py` | Thermodynamic prior — high interface PAE ⇒ entropy cost ⇒ weaker binding |
+| B | pLDDT-gated NIS: rescale `%NIS_*` by per-complex pLDDT statistics | `plddt_nis.py` | v1 only gated contacts; NIS side never tested |
+| C | IC × ipTM interactions: new features `IC_cc·ipTM`, …, `IC_cc·⟨PAE⟩` in AIC pool | `interaction_refit.py` | Linear AIC cannot discover products; interactions live in a space v1 couldn't see |
+
+### Critical methodological note — the right comparator is REFIT-CV, not FIXED
+
+v1's "ΔR vs stock FIXED" framing conflated two effects:
+- Feature-signal change (what we care about)
+- **Sample-size penalty** — refitting on N=81 with 4-fold CV trains each fold on ~60 complexes, whereas stock FIXED was calibrated on an *external* 80-complex crystal set → FIXED has a ~0.1 R head start unrelated to feature quality.
+
+For refit+CV models, the matched comparator is **stock 6-feat REFIT with the same 4-fold CV protocol** (0.488 msa_only / 0.557 template_msa). Any ΔR against FIXED larger than −0.10 is really *feature-signal neutral* relative to the refit baseline.
+
+### v1.1 results
+
+| Exp | ΔR vs FIXED | **ΔR vs REFIT-CV (matched)** | Verdict |
+|---|---:|---:|---|
+| A entropy | −0.11 to −0.13 | ≈ 0 | **NO-HELP** — entropy term adds zero signal beyond the 6 stock features; sign-constrained coef stays non-negative (prior compatible, uninformative) |
+| B pLDDT-NIS | −0.09 to −0.13 | +0.011 ± 0.037 | **NO-HELP** — best variant (high-pLDDT residue fraction, template_msa) indistinguishable from noise; NIS is not the bottleneck |
+| **C IC×ipTM** | −0.07 to −0.09 | **+0.049 to +0.086** | **MARGINAL** — only experiment with signal above the bootstrap noise floor |
+
+### Experiment C detail — the one positive signal
+
+Under AIC stepwise selection over 14 candidates (6 stock + 4 `IC × ipTM` + 4 `IC × mean_PAE_contacts`):
+
+- **Step 1 on both modes: `ic_pa × ipTM`** — strongest single feature in the entire pool, coef ≈ −0.23 to −0.24. Polar-aliphatic contacts weighted by global prediction reliability.
+- **Step 2 on both modes: `ic_cc × mean_PAE_contacts`** — a pure PAE×IC interaction that v1 linear AIC could never discover because it only adds main effects. Coef ≈ −0.008 to −0.016 (small but survives selection).
+
+Naive "add all 4 IC×ipTM interactions" fails — adds variance without sparsity benefit. AIC-guided selection is essential.
+
+**K81 caveat on C**: ipTM median is 0.81 (msa_only) / 0.93 (template_msa) — very narrow dynamic range on this benchmark. The IC×ipTM product ≈ IC × const for the majority of rigid/high-confidence complexes. Vreven v5.5's explicit rigid/medium/flex/difficult strata should give ipTM the dynamic range it lacks on K81.
+
+### Updated decision
+
+- **Keep pursuing C on Vreven v5.5.** The sparse AIC-selected interaction (`ic_pa × ipTM` + `ic_cc × ⟨PAE⟩`) is the one direction that shows above-noise lift against the matched comparator. It's also the only formulation that exploits PAE × IC *coupling*, which is the right place for confidence-aware binding prediction to live.
+- **Close A and B as documented null.** Entropy surrogate and NIS-side gating do not carry orthogonal signal on Kastritis 81.
+- All five scripts remain applicable to Vreven v5.5 once Boltz predictions land — no code changes needed beyond pointing the data-loading paths at the new manifest.
+
+### Updated scripts index
+
+- `entropy_surrogate.py` — stock + thermodynamic entropy term with sign-constrained fit (v1.1 A)
+- `plddt_nis.py` — pLDDT-gated / scaled NIS variants (v1.1 B)
+- `interaction_refit.py` — IC × ipTM and IC × ⟨PAE⟩ interaction features + AIC (v1.1 C) — **the positive lead**
 
 ---
 
