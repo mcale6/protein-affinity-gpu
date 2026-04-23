@@ -99,6 +99,7 @@ def boltz_inference(
     template_cif: bytes | None,
     pdb_id: str,
     mode: str,
+    diffusion_samples: int = 1,
 ) -> bytes:
     import io
     import subprocess
@@ -117,6 +118,7 @@ def boltz_inference(
         "--use_msa_server",
         "--cache", str(MODELS_DIR),
         "--out_dir", str(out_dir),
+        "--diffusion_samples", str(diffusion_samples),
         "--override",
     ]
     print(f"[boltz] {pdb_id}/{mode} running: {' '.join(cmd)}")
@@ -193,6 +195,7 @@ def main(
     limit: int = 1,
     pdb_ids: str = "",
     modes: str = "msa_only,template_msa",
+    diffusion_samples: int = 1,
     force_download: bool = False,
 ):
     paths = _local_paths(dataset)
@@ -230,10 +233,13 @@ def main(
             )
             jobs.append((pdb_id, mode, yaml_text, template_cif))
 
-    print(f"\nLaunching {len(jobs)} predictions on {GPU_TYPE}...")
+    print(f"\nLaunching {len(jobs)} predictions on {GPU_TYPE} "
+          f"(diffusion_samples={diffusion_samples})...")
     futures = []
     for pdb_id, mode, yaml_text, template_cif in jobs:
-        fut = boltz_inference.spawn(yaml_text, template_cif, pdb_id, mode)
+        fut = boltz_inference.spawn(
+            yaml_text, template_cif, pdb_id, mode, diffusion_samples,
+        )
         futures.append((pdb_id, mode, fut))
 
     import tarfile
