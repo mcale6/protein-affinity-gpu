@@ -279,7 +279,7 @@ This runs in a post-step callback using the **hard** SASA kernel
 zero backprop cost and does not alter the loss. BSA is a direct
 interface-formation readout — a converging trajectory should trend
 upward into the ~200–1500 Å² range typical of natural protein-protein
-interfaces. Plot it with `af_design/plot_afdesign_traj.py --metric bsa`
+interfaces. Plot it with `af_design/plot_afdesign.py rmsd --metric bsa`
 (or `--metric both` for the RMSD + BSA two-panel).
 
 ### Stage 1 runs with `ba_val` zeroed
@@ -310,6 +310,102 @@ BSA logging stays on for all stages — it is a diagnostic, not a loss,
 so zero-contact frames correctly log BSA ≈ 0 and do not distort the
 objective. A per-step `i_con` gate that skips the hard-SASA calls when
 no contacts exist is a cheap future optimisation, not required.
+
+## April 2026 run notes
+
+### SASA instability in production traces (still investigating)
+
+Production three-stage runs on 8HGO (EGFR/HER2, binder=200 aa, 75+45+10 iters)
+show that the `ba_val` term and the diagnostic BSA both go through a noisy
+regime around the logits→soft transition. The `af-8hgo-prod` metric traces
+(copied below from `benchmarks/output/afdesign_april2026/af-8hgo-prod/`) are
+representative:
+
+![AFDesign SASA instability — 8HGO production run](assets/afdesign_sasa_instability_april2026.png)
+
+What the plot shows:
+
+- `ba_val` range spans `[-1.5e+02, -5.5]` across the run — the Prodigy-IC score
+  oscillates heavily while the binder is still placing itself against the
+  target, even though the regression is supposed to be bounded.
+- BSA peaks at `~9820 Å²` mid-run before settling near `~425 Å²` at the end.
+  Natural protein-protein interfaces are in the `200–1500 Å²` band, so the
+  spike is a compute artefact (hard-SASA kernel instability when the binder
+  and target overlap numerically, not a real interface formation event).
+- The `i_ptm` / `i_pae` / `plddt` probability-scale curves are comparatively
+  well-behaved.
+
+Current working theory: during the logits stage the binder has not yet
+committed to a fold or a target-facing orientation, and the hard Shrake–Rupley
+kernel reads whatever inter-chain coordinates happen to exist. The soft-SASA
+path used *inside* the gradient (via `add_ba_val_loss`) smooths this out, but
+the hard-SASA diagnostic does not. Mitigations tried so far:
+
+- **Gated compute** — BSA is now only evaluated when
+  `weights["ba_val"] > 0`, so the logits-stage zero-weighted frames no longer
+  produce spurious BSA entries (`bsa_history.json` writes `NaN` instead).
+  The plot masks these out.
+- **Stage-schedule gating** — the `ba_val` loss itself is zero-weighted during
+  stage 1; the spikes are therefore a *diagnostic* artefact and do not steer
+  the optimiser.
+
+Still open:
+
+- Hard-SASA kernel behaviour when the binder passes through the target volume
+  numerically (i.e. before stage 2 places a real interface). A contact-count
+  pre-gate on the hard-SASA calls, or a soft-SASA replacement for the BSA
+  diagnostic, would both remove the artefact.
+- Whether the early-stage ba_val oscillation is entirely a SASA artefact or
+  whether the contact-class counts (IC_CC / IC_CA / IC_PP / IC_PA) are also
+  unstable. The PRODIGY regression is linear so a noisy contact count
+  translates directly into a noisy ΔG.
+
+### Adaptive stage schedule (Phase A / Phase B)
+
+An adaptive alternative to the fixed three-stage cascade is now wired up:
+
+- **Phase A** — `design_soft` with `weights["ba_val"] = 0`, runs until `i_ptm`
+  stops improving (min_delta / patience / stability-window early-stop).
+- **Phase B** — `design_soft` with `weights["ba_val"] = ba_val_weight`, runs
+  for the remainder of the soft-stage budget.
+- **Hard stage** — `design_hard` unchanged.
+
+Motivation: fixed 75+45+10 wastes compute when the target happens to lock in
+i_ptm in the first ~20 steps, and under-runs when it doesn't. The adaptive
+path lets Phase A collect a structural scaffold under a clean
+(AF-native-only) loss before the PRODIGY ΔG term joins the objective.
+
+### Infrastructure notes
+
+- **BSA compute gate.** Previously the three hard-SASA kernel calls
+  (`target_alone`, `binder_alone`, `complex`) ran every step regardless of
+  `ba_val` weight. Grepping `jax.sasa.scan` in the old Modal log showed 878
+  calls across 146 steps; after gating, a full run logs only the single
+  compile-banner line.
+- **Early-stop bug.** `_latest_metric(...)` used to read from
+  `af_model.aux["log"]`, which fires *before* ColabDesign's
+  `_save_results` finalises the per-step log. Adaptive runs were therefore
+  gating on stale values and never early-stopping. Fixed by reading
+  `af_model._tmp["log"][-1]` — the same list that becomes `trajectory.json`,
+  guaranteed finalised at callback time.
+- **Modal `--detach`.** Long runs (multi-hundred-step cascades, ~30+ min on
+  A100-80GB) must be launched with `modal run --detach`; otherwise the local
+  CLI owns the app heartbeat and any disconnect (abort, network blip, laptop
+  sleep) kills the app mid-run with `APP_STATE_STOPPED`.
+- **Per-step diagnostic logging.** Both Phase A and Phase B loops now emit
+  `[phase_a] step=… cur_iptm=… a_best=… a_best_iter=… gap=… streak=…` so
+  early-stop decisions are inspectable from the Modal log without re-running.
+- **Hotspot extraction helper.** `af_design/extract_interface_hotspots.py`
+  prints an AFDesign-ready `--hotspot` string (e.g. `"A42,A45,A89"`) for any
+  two chains in a PDB, with an optional `--top-k` for the N closest residues.
+  Used to seed the EGFR/HER2 runs with the 6 tightest-contact residues.
+
+### Output layout
+
+AFDesign April 2026 runs are grouped under
+`benchmarks/output/afdesign_april2026/` (ten run directories plus the four
+comparison PNGs and the per-run Modal logs under `logs/`). The earlier
+flat layout under `benchmarks/output/` is no longer used for new runs.
 
 ## TODO
 

@@ -7,8 +7,9 @@ Two independent slices:
    monomer via its mask and subtracting ``SASA(complex)`` recovers positive
    BSA when the monomers are in contact and ≈0 when they are far apart.
 
-2. The ``af_design/plot_afdesign_traj.py`` CLI — checks that ``--metric``
-   accepts ``rmsd``, ``bsa``, and ``both`` against synthetic JSON artifacts.
+2. The ``af_design/plot_afdesign.py rmsd`` subcommand — checks that
+   ``--metric`` accepts ``rmsd``, ``bsa``, and ``both`` against synthetic
+   JSON artifacts.
 """
 from __future__ import annotations
 
@@ -73,8 +74,8 @@ def test_bsa_math_positive_on_contact_and_zero_when_separated():
     assert bsa_contact > bsa_far
 
 
-def test_plot_afdesign_traj_renders_all_metric_modes(tmp_path):
-    """Smoke-test the renamed plot script across ``rmsd | bsa | both``."""
+def test_plot_afdesign_rmsd_renders_all_metric_modes(tmp_path):
+    """Smoke-test the consolidated plot CLI across ``rmsd | bsa | both``."""
     soft_dir = tmp_path / "soft"
     hardish_dir = tmp_path / "hardish"
     soft_dir.mkdir()
@@ -89,14 +90,14 @@ def test_plot_afdesign_traj_renders_all_metric_modes(tmp_path):
     (soft_dir / "bsa_history.json").write_text(json.dumps([0.0, 120.5, 310.2, 480.7]))
     (hardish_dir / "bsa_history.json").write_text(json.dumps([0.0, 90.1, 250.4, 400.0]))
 
-    script = Path(__file__).resolve().parents[1] / "af_design" / "plot_afdesign_traj.py"
+    script = Path(__file__).resolve().parents[1] / "af_design" / "plot_afdesign.py"
     assert script.exists(), f"missing plot script: {script}"
 
     for metric in ("rmsd", "bsa", "both"):
         output = tmp_path / f"out_{metric}.png"
         proc = subprocess.run(
             [
-                sys.executable, str(script),
+                sys.executable, str(script), "rmsd",
                 "--soft-dir", str(soft_dir),
                 "--hardish-dir", str(hardish_dir),
                 "--output", str(output),

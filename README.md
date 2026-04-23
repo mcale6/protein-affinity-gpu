@@ -225,6 +225,24 @@ blowing up AlphaFold2's backward-pass memory. See
 [docs/AF_DESIGN.md](docs/AF_DESIGN.md) for the soft vs hard contact /
 NIS / SASA analysis and the `aux["seq"]["soft"]` vs `"pseudo"` choice.
 
+> **Status — experimental auxiliary loss.** `ba_val` is wired in as an
+> *auxiliary* term on top of the standard AFDesign hallucination loss
+> (pLDDT / pAE / i_pae / i_con / rg / helix) — we are still calibrating
+> its weight and figuring out how (and whether) to fold it cleanly into
+> the standard hallucination pipeline. Production runs currently use a
+> small weight (≤0.3) and a three-stage cascade that zeroes `ba_val`
+> during `design_logits` to keep the optimiser on AF-native structural
+> terms until the binder has a fold. April 2026 runs also show noisy
+> BSA / `ba_val` traces around the stage transition — see the example
+> below and [docs/AF_DESIGN.md](docs/AF_DESIGN.md#april-2026-run-notes):
+>
+> ![AFDesign SASA instability — 8HGO production run](docs/assets/afdesign_sasa_instability_april2026.png)
+>
+> MPNN re-sequencing and AF monomer re-prediction (the BindCraft /
+> Bennett et al. 2023 filter pipeline) are **not yet wired up** — treat
+> `best_sequences` from `modal_afdesign_ba_val.py` as optimiser
+> snapshots, not candidates.
+
 ## Modal Benchmark
 
 The comparison figure below is committed at
@@ -374,18 +392,40 @@ modal setup
   the numerical values: Bondi, A. *van der Waals Volumes and Radii.*
   J. Phys. Chem. 68(3), 441–451 (1964).
   <https://doi.org/10.1021/j100785a001>.
-- **Fibonacci / golden-spiral sphere** — Swinbank, R., Purser, R.J.
-  *Fibonacci grids: A novel approach to global modelling.* Quarterly
-  Journal of the Royal Meteorological Society 132, 1769–1793 (2006).
-  <https://doi.org/10.1256/qj.05.227>. The quasi-uniform sphere-point
+- **Fibonacci / golden-spiral sphere** — the quasi-uniform sphere-point
   generator in `protein_affinity_gpu.sasa.generate_sphere_points` uses
-  the midpoint Fibonacci spacing to match freesasa's
-  `sasa_sr.c::test_points()`.
-- **Thomson-sphere / exact uniform sphere (alternative)** —
-  Ribeiro-Filho, N. et al. *dr_sasa: Accurate algorithms for deriving
-  surface areas and contacts in biomolecular assemblies.* J. Comp. Chem.
-  (2019). <https://doi.org/10.1002/jcc.26049>. `dr_sasa` uses an exact
-  Thomson-sphere (electrostatic-equilibrium) point set rather than the
-  Fibonacci spiral; this is the more uniform alternative and a candidate
-  swap-in for `generate_sphere_points` if per-atom sphere uniformity
-  matters more than closed-form generation speed.
+  midpoint Fibonacci spacing to match freesasa's
+  `sasa_sr.c::test_points()`. Background:
+  <https://en.wikipedia.org/wiki/Fibonacci_sequence> and
+  <https://en.wikipedia.org/wiki/Golden_spiral>.
+- **Kahraman 2013 T3 benchmark set** — Kahraman, A., Herzog, F.,
+  Leitner, A., Rosenberger, G., Aebersold, R., Malmström, L.
+  *Cross-link guided molecular modeling with ROSETTA.* PLoS ONE 8(9),
+  e73411 (2013). <https://doi.org/10.1371/journal.pone.0073411>. The
+  16 two-chain complexes used throughout this repo's benchmarks are
+  the "T3" difficult-targets table from this paper — see
+  [`benchmarks/datasets/kahraman_2013_t3.tsv`](benchmarks/datasets/kahraman_2013_t3.tsv)
+  for the PDB IDs, chain selections, and the original cross-link-guided
+  docking metadata (kept for provenance; this repo only uses the
+  structures, not the cross-link columns).
+- **dr_sasa (alternative, contact-surface focus)** — Ribeiro, J.,
+  Ríos-Vera, C., Melo, F., Schüller, A. *Calculation of accurate
+  interatomic contact surface areas for the quantitative analysis of
+  non-bonded molecular interactions.* Bioinformatics 35(18),
+  3499–3501 (2019). <https://doi.org/10.1093/bioinformatics/btz062>.
+  `dr_sasa` extends Shrake–Rupley by computing overlapping surface
+  patches directly so it can report interatomic contact and buried
+  surface areas as first-class outputs, rather than inferring them
+  from SASA differences (which the paper shows underestimates
+  protein–DNA contact surfaces by ~40%). Listed as a candidate swap-in
+  if contact-surface accuracy becomes more important than per-structure
+  throughput.
+- **Thomson-sphere / exact uniform sphere point sets (alternative)** —
+  precomputed electrostatic-equilibrium point sets on the unit sphere,
+  more uniform than the Fibonacci spiral at a fixed N. Three tables
+  are already packaged at
+  [`src/protein_affinity_gpu/data/thomson100.xyz`](src/protein_affinity_gpu/data/thomson100.xyz),
+  `thomson1000.xyz`, `thomson15092.xyz` and can be swapped in for
+  `generate_sphere_points` if per-atom sphere uniformity matters more
+  than closed-form generation. Background:
+  <https://en.wikipedia.org/wiki/Thomson_problem>.

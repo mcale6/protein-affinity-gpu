@@ -39,6 +39,8 @@ Stable differentiable AFDesign helpers live in
 | Python API root | [src/protein_affinity_gpu/__init__.py](../src/protein_affinity_gpu/__init__.py) |
 | Unified predictor | [src/protein_affinity_gpu/predict.py](../src/protein_affinity_gpu/predict.py) |
 | AFDesign helper | [src/protein_affinity_gpu/af_design.py](../src/protein_affinity_gpu/af_design.py) · [docs](AF_DESIGN.md) |
+| AFDesign Modal entrypoint + plots | [af_design/](../af_design/) · [docs](AF_DESIGN.md) |
+| AFDesign April 2026 runs | [benchmarks/output/afdesign_april2026/](../benchmarks/output/afdesign_april2026/) |
 | CPU predictor | [src/protein_affinity_gpu/cpu.py](../src/protein_affinity_gpu/cpu.py) |
 | Default SASA kernels | [src/protein_affinity_gpu/sasa.py](../src/protein_affinity_gpu/sasa.py) |
 | Stable soft kernels | [src/protein_affinity_gpu/sasa_soft.py](../src/protein_affinity_gpu/sasa_soft.py) |
@@ -74,8 +76,10 @@ protein-affinity-gpu/
 │   │   └── profile_sasa.py       # Single-complex JAX block-size sweep (estimator vs observed)
 │   └── fixtures/1A2K.pdb         # Canonical two-chain complex used by tests
 ├── af_design/
-│   ├── modal_afdesign_ba_val.py  # Modal entrypoint: AfDesign binder hallucination + ba_val loss
-│   └── plot_afdesign_rmsd.py     # Binder CA RMSD vs iteration plot (soft vs hard-ish)
+│   ├── modal_afdesign_ba_val.py       # Modal entrypoint: AfDesign binder hallucination + ba_val loss
+│   ├── extract_interface_hotspots.py  # Crystal-interface → AFDesign --hotspot string (per-chain, top-k)
+│   ├── plot_afdesign.py               # Unified plot CLI: traces | rmsd | animate | compare
+│   └── input/                         # Input PDBs for Modal runs (e.g. 8hgo_AB.pdb)
 ├── src/protein_affinity_gpu/
 │   ├── __init__.py            # Public API (lazy-loads impls)
 │   ├── version.py             # __version__ (read by Hatch)

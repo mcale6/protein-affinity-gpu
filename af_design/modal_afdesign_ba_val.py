@@ -192,6 +192,14 @@ def run_afdesign_binder(
     logits_iters: int = 75,
     soft_iters: int = 45,
     hard_iters: int = 10,
+    schedule_mode: str = "three_stage",
+    soft_max_iters: int = 400,
+    hard_max_iters: int = 100,
+    iptm_target: float = 0.7,
+    ba_val_target: float = -8.0,
+    stability_window: int = 10,
+    early_stop_patience: int = 50,
+    early_stop_min_delta: float = 0.05,
     filter_plddt_min: float = 0.8,
     filter_iptm_min: float = 0.5,
     filter_ipae_max: float = 0.4,
@@ -315,34 +323,43 @@ def run_afdesign_binder(
             model._inputs["batch"]["aatype"], dtype=_np.int32
         )[:total_len]
         aatype_np = _np.clip(aatype_np, 0, _radii_matrix_np.shape[0] - 1)
-        full_radii = _radii_matrix_np[aatype_np]  # [total_len, 37]
 
-        pos_flat = jnp.asarray(atoms.reshape(-1, 3), dtype=jnp.float32)
-        radii_flat = jnp.asarray(full_radii.reshape(-1), dtype=jnp.float32)
-        mask_complex = jnp.asarray(atom_mask_np.reshape(-1), dtype=jnp.float32)
+        # Only pay for the 3 hard-SASA kernel launches when ba_val is active.
+        # Phase A of the adaptive schedule (and stage 1 of three_stage) runs
+        # with weight=0 — compute is pure overhead there. Keep bsa_history
+        # length aligned by appending NaN so plot step-indexing stays correct.
+        ba_val_weight_now = float(model.opt["weights"].get("ba_val", 0.0))
+        if ba_val_weight_now > 0.0:
+            full_radii = _radii_matrix_np[aatype_np]  # [total_len, 37]
 
-        target_residue_slot = _np.zeros(total_len, dtype=_np.float32)
-        target_residue_slot[:target_len] = 1.0
-        target_atom_slot = jnp.asarray(
-            _np.repeat(target_residue_slot, n_atom_types)
-        )
-        mask_target_only = mask_complex * target_atom_slot
-        mask_binder_only = mask_complex * (1.0 - target_atom_slot)
+            pos_flat = jnp.asarray(atoms.reshape(-1, 3), dtype=jnp.float32)
+            radii_flat = jnp.asarray(full_radii.reshape(-1), dtype=jnp.float32)
+            mask_complex = jnp.asarray(atom_mask_np.reshape(-1), dtype=jnp.float32)
 
-        block_size = max(1, min(int(pos_flat.shape[0]), 768))
-        sasa_complex = calculate_sasa_batch_scan(
-            pos_flat, radii_flat, mask_complex, block_size, _sphere_points_jnp
-        )
-        sasa_target = calculate_sasa_batch_scan(
-            pos_flat, radii_flat, mask_target_only, block_size, _sphere_points_jnp
-        )
-        sasa_binder = calculate_sasa_batch_scan(
-            pos_flat, radii_flat, mask_binder_only, block_size, _sphere_points_jnp
-        )
-        bsa = float(
-            sasa_target.sum() + sasa_binder.sum() - sasa_complex.sum()
-        )
-        bsa_history.append(bsa)
+            target_residue_slot = _np.zeros(total_len, dtype=_np.float32)
+            target_residue_slot[:target_len] = 1.0
+            target_atom_slot = jnp.asarray(
+                _np.repeat(target_residue_slot, n_atom_types)
+            )
+            mask_target_only = mask_complex * target_atom_slot
+            mask_binder_only = mask_complex * (1.0 - target_atom_slot)
+
+            block_size = max(1, min(int(pos_flat.shape[0]), 768))
+            sasa_complex = calculate_sasa_batch_scan(
+                pos_flat, radii_flat, mask_complex, block_size, _sphere_points_jnp
+            )
+            sasa_target = calculate_sasa_batch_scan(
+                pos_flat, radii_flat, mask_target_only, block_size, _sphere_points_jnp
+            )
+            sasa_binder = calculate_sasa_batch_scan(
+                pos_flat, radii_flat, mask_binder_only, block_size, _sphere_points_jnp
+            )
+            bsa = float(
+                sasa_target.sum() + sasa_binder.sum() - sasa_complex.sum()
+            )
+            bsa_history.append(bsa)
+        else:
+            bsa_history.append(float("nan"))
 
         if save_trajectory:
             traj_positions.append(atoms.copy())
@@ -354,7 +371,123 @@ def run_afdesign_binder(
             else:
                 traj_plddt.append(_np.zeros(total_len, dtype=_np.float32))
 
-    if three_stage:
+    def _latest_metric(key: str, default: float) -> float:
+        # ColabDesign appends the fully-formed per-step log dict to
+        # ``_tmp["log"]`` inside ``_save_results`` after the forward pass.
+        # That is the exact same dict that lands in trajectory.json, so
+        # reading it here is both correct and self-consistent. ``aux["log"]``
+        # was unreliable — an earlier adaptive run ran all 400 Phase A iters
+        # without firing the patience break, which only makes sense if
+        # cur was drifting in a way that kept resetting a_best_iter.
+        tmp = getattr(af_model, "_tmp", None)
+        if isinstance(tmp, dict):
+            log_list = tmp.get("log")
+            if isinstance(log_list, list) and log_list:
+                row = log_list[-1]
+                if isinstance(row, dict) and key in row:
+                    try:
+                        return float(row[key])
+                    except (TypeError, ValueError):
+                        pass
+        return default
+
+    if schedule_mode == "adaptive":
+        # Phase A: soft with ba_val gated to 0. Exits on either
+        #   (converged) i_ptm stays >= iptm_target for stability_window steps
+        #   (stalled)   no improvement of early_stop_min_delta in the last
+        #               early_stop_patience steps — a dead trajectory
+        #   (budget)    soft_max_iters reached.
+        # Phase B only runs on a converged exit; a stalled trajectory skips
+        # straight to hard so the summary carries the failure signal without
+        # burning budget on ba_val gradient noise.
+        af_model.opt["weights"]["ba_val"] = 0.0
+        phase_a_iters = 0
+        a_streak = 0
+        a_best = float("-inf")
+        a_best_iter = 0
+        a_converged = False
+        a_stalled = False
+        for _ in range(int(soft_max_iters)):
+            af_model.design_soft(1, temp=design_temp, callback=_capture_design_state)
+            phase_a_iters += 1
+            cur = _latest_metric("i_ptm", 0.0)
+            if cur > a_best + float(early_stop_min_delta):
+                a_best = cur
+                a_best_iter = phase_a_iters
+            if cur >= float(iptm_target):
+                a_streak += 1
+                if a_streak >= int(stability_window):
+                    a_converged = True
+                    break
+            else:
+                a_streak = 0
+            gap = phase_a_iters - a_best_iter
+            logging.info(
+                "[phase_a] step=%d cur_iptm=%.3f a_best=%.3f a_best_iter=%d gap=%d streak=%d",
+                phase_a_iters, cur, a_best, a_best_iter, gap, a_streak,
+            )
+            if gap >= int(early_stop_patience):
+                a_stalled = True
+                break
+
+        phase_b_iters = 0
+        b_streak = 0
+        b_best = float("inf")
+        b_best_iter = 0
+        b_converged = False
+        b_stalled = False
+        if a_converged:
+            # Phase B: re-enable ba_val only on a converged Phase A. Same
+            # twin exits (converged / stalled / budget). Stall skips to hard.
+            af_model.opt["weights"]["ba_val"] = ba_val_weight
+            remaining = max(0, int(soft_max_iters) - phase_a_iters)
+            for _ in range(remaining):
+                af_model.design_soft(1, temp=design_temp, callback=_capture_design_state)
+                phase_b_iters += 1
+                cur = _latest_metric("ba_val", 0.0)
+                if cur < b_best - float(early_stop_min_delta):
+                    b_best = cur
+                    b_best_iter = phase_b_iters
+                if cur <= float(ba_val_target):
+                    b_streak += 1
+                    if b_streak >= int(stability_window):
+                        b_converged = True
+                        break
+                else:
+                    b_streak = 0
+                gap = phase_b_iters - b_best_iter
+                logging.info(
+                    "[phase_b] step=%d cur_ba_val=%.3f b_best=%.3f b_best_iter=%d gap=%d streak=%d",
+                    phase_b_iters, cur, b_best, b_best_iter, gap, b_streak,
+                )
+                if gap >= int(early_stop_patience):
+                    b_stalled = True
+                    break
+
+        af_model.design_hard(int(hard_max_iters), callback=_capture_design_state)
+        effective_steps = phase_a_iters + phase_b_iters + int(hard_max_iters)
+        stage_schedule = {
+            "mode": "adaptive",
+            "phase_a_iters": int(phase_a_iters),
+            "phase_b_iters": int(phase_b_iters),
+            "hard_iters": int(hard_max_iters),
+            "soft_max_iters": int(soft_max_iters),
+            "iptm_target": float(iptm_target),
+            "ba_val_target": float(ba_val_target),
+            "stability_window": int(stability_window),
+            "early_stop_patience": int(early_stop_patience),
+            "early_stop_min_delta": float(early_stop_min_delta),
+            "phase_a_exit": (
+                "converged" if a_converged else "stalled" if a_stalled else "budget"
+            ),
+            "phase_b_exit": (
+                "skipped" if not a_converged
+                else "converged" if b_converged
+                else "stalled" if b_stalled
+                else "budget"
+            ),
+        }
+    elif three_stage:
         # Stage 1 runs with the ``ba_val`` PRODIGY ΔG term zeroed out: before
         # contacts actually form, PRODIGY's IC-NIS score collapses to the
         # −15.94 intercept plus regression-coefficient noise, so its gradient
@@ -426,9 +559,12 @@ def run_afdesign_binder(
             best_aux.get("pae"), target_len_best, binder_len_effective
         )
 
-    if bsa_history:
-        max_bsa = float(max(bsa_history))
-        final_bsa = float(bsa_history[-1])
+    # NaNs in bsa_history mark steps where ba_val was inactive (Phase A /
+    # logits stage); exclude them from the scalar summary fields.
+    _finite_bsa = [b for b in bsa_history if b == b]  # NaN != NaN
+    if _finite_bsa:
+        max_bsa = float(max(_finite_bsa))
+        final_bsa = float(_finite_bsa[-1])
     else:
         max_bsa = None
         final_bsa = None
@@ -626,6 +762,14 @@ def main(
     logits_iters: int = 75,
     soft_iters: int = 45,
     hard_iters: int = 10,
+    schedule_mode: str = "three_stage",
+    soft_max_iters: int = 400,
+    hard_max_iters: int = 100,
+    iptm_target: float = 0.7,
+    ba_val_target: float = -8.0,
+    stability_window: int = 10,
+    early_stop_patience: int = 50,
+    early_stop_min_delta: float = 0.05,
     filter_plddt_min: float = 0.8,
     filter_iptm_min: float = 0.5,
     filter_ipae_max: float = 0.4,
@@ -676,6 +820,14 @@ def main(
         logits_iters=logits_iters,
         soft_iters=soft_iters,
         hard_iters=hard_iters,
+        schedule_mode=schedule_mode,
+        soft_max_iters=soft_max_iters,
+        hard_max_iters=hard_max_iters,
+        iptm_target=iptm_target,
+        ba_val_target=ba_val_target,
+        stability_window=stability_window,
+        early_stop_patience=early_stop_patience,
+        early_stop_min_delta=early_stop_min_delta,
         filter_plddt_min=filter_plddt_min,
         filter_iptm_min=filter_iptm_min,
         filter_ipae_max=filter_ipae_max,

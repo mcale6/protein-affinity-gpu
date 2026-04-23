@@ -42,6 +42,9 @@ def main() -> None:
     parser.add_argument("--partner", required=True, help="Partner chain ID")
     parser.add_argument("--cutoff", type=float, default=5.0,
                         help="Interface cutoff in Å (default 5.0)")
+    parser.add_argument("--top-k", type=int, default=0,
+                        help="Keep only the N residues closest to the partner "
+                             "chain (0 = keep all; use e.g. 4 for AFDesign hotspots)")
     args = parser.parse_args()
 
     structure = PDBParser(QUIET=True).get_structure("s", str(args.pdb))
@@ -69,12 +72,20 @@ def main() -> None:
         if resnum not in hotspot_residues or d_min < hotspot_residues[resnum]:
             hotspot_residues[resnum] = float(d_min)
 
-    ordered = sorted(hotspot_residues)
-    hotspot_str = ",".join(f"{args.target}{r}" for r in ordered)
+    if args.top_k > 0:
+        # Rank by proximity (smallest d_min first), keep the N closest, then
+        # re-sort by residue number for readable output.
+        ranked = sorted(hotspot_residues.items(), key=lambda kv: kv[1])
+        kept = sorted(r for r, _ in ranked[: args.top_k])
+    else:
+        kept = sorted(hotspot_residues)
+
+    hotspot_str = ",".join(f"{args.target}{r}" for r in kept)
     print(hotspot_str)
+    suffix = f" (top-{args.top_k} by proximity)" if args.top_k > 0 else ""
     print(
-        f"# {len(ordered)} residues on chain {args.target} "
-        f"within {args.cutoff} Å of chain {args.partner}"
+        f"# {len(kept)}/{len(hotspot_residues)} residues on chain {args.target} "
+        f"within {args.cutoff} Å of chain {args.partner}{suffix}"
     )
 
 
