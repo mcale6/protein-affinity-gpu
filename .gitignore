@@ -29,6 +29,9 @@ results/
 benchmarks/downloads/
 benchmarks/output/
 
+# Compiled binaries under benchmarks/tools/ (rebuild commands are in each tool's README)
+benchmarks/tools/USalign
+
 # Editors and OS files
 .DS_Store
 .idea/
