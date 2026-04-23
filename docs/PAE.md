@@ -364,6 +364,25 @@ Naive "add all 4 IC×ipTM interactions" fails — adds variance without sparsity
 
 ---
 
+## Vreven v5.5 — staged for Phase 2 v2 validation
+
+Dataset + merged affinity tables are now in-repo:
+
+| Path | Content |
+|---|---|
+| `benchmarks/downloads/vreven_bm55/` | Raw upstream BM5.5 (tar + extracted PDBs + Table_BM5.5.xlsx + Pierce Ab-Ag files). Gitignored. See its README for full citations. |
+| `benchmarks/datasets/vreven_bm55/manifest.csv` | 257 BM5.5 complexes, typed columns, iRMSD strata |
+| `benchmarks/datasets/vreven_bm55/manifest_with_dg.csv` | Same 257 rows + `dg_exp`, `kd_nm`, `dg_source` populated for 106 complexes |
+| `benchmarks/datasets/vreven_bm55/manifest_affinity_only.csv` | **The calibration target: 106 ΔG-annotated complexes** (64 from Kastritis 81 + 42 from Pierce antibody-antigen; zero overlap) |
+
+Strata of the 106-complex affinity subset: 80 rigid / 17 medium / 9 difficult (at iRMSD 1.5/2.2 Å cutoffs). Better non-rigid coverage than Kastritis 81 (81 → 19 non-rigid vs 106 → 26 non-rigid) plus broader class mix (AA 41, OX 17, OG 11, EI 10, AS 9, ES 7, OR 7, ER 4).
+
+**Known gap**: 151 BM5.5 complexes still without ΔG. Recoverable by merging in the Moal/Vreven AB2 table (bmm.crick.ac.uk mirror currently unreachable from our network; deferred).
+
+**Next step to execute**: generate Boltz-2 predictions for the 106 affinity-subset complexes using the existing `benchmarks/scripts/boltz_pipeline/` pipeline (same MSA → Boltz → PAE npz steps as Kastritis 81, just pointed at `manifest_affinity_only.csv`). Then re-run `interaction_refit.py` to test whether the AIC-selected `ic_pa × ipTM` and `ic_cc × ⟨PAE⟩` signals from K81 survive at broader ipTM dynamic range.
+
+---
+
 ## Phase 3 — Design-side integration (deferred)
 
 > **Do not implement until Phase 2 validates the primitive on experimental ΔG.**

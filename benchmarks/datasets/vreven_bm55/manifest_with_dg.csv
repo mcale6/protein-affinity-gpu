@@ -1,0 +1,258 @@
+pdb_id,Complex,chains_spec,Cat.,PDB ID 1,Protein 1,PDB ID 2,Protein 2,I-RMSD (Å),ΔASA(Å2),BM version introduced,stratum_iRMSD15_22,dg_exp,kd_nm,dg_source
+1AHW,1AHW_AB:C,AB:C,AA,1FGN_LH,Fab 5g9,1TFH_A,Tissue factor,0.69,1899.0,2.0,rigid,,,
+1DQJ,1DQJ_AB:C,AB:C,AA,1DQQ_CD,Fab Hyhel63,3LZT_,HEW lysozyme,0.75,1765.0,2.0,rigid,-11.7,,Kastritis81
+1E6J,1E6J_HL:P,HL:P,AA,1E6O_HL,Fab,1A43_,HIV-1 capsid protein p24,1.05,1245.0,2.0,rigid,-10.3,,Kastritis81
+1JPS,1JPS_HL:T,HL:T,AA,1JPT_HL,Fab D3H44,1TFH_B,Tissue factor,0.51,1852.0,2.0,rigid,-13.6,,Kastritis81
+1MLC,1MLC_AB:E,AB:E,AA,1MLB_AB,Fab44.1,3LZT_,HEW lysozyme,0.6,1392.0,2.0,rigid,-9.6,,Kastritis81
+1S78,1S78_DC:A,DC:A,AA,1L7I_HL,pertuzumab (Perjeta),2A91_A,ErbB2,1.13,2175.0,5.5,rigid,-8.45,500.0,PierceAbAg
+1VFB,1VFB_AB:C,AB:C,AA,1VFA_AB,Fv D1.3,8LYZ_,HEW lysozyme,1.02,1383.0,2.0,rigid,-11.5,,Kastritis81
+1WEJ,1WEJ_HL:F,HL:F,AA,1QBL_HL,Fab E8,1HRC_,Cytochrome C,0.31,1177.0,2.0,rigid,-12.5,,Kastritis81
+2FD6,2FD6_HL:U,HL:U,AA,2FAT_HL,Plasminogen receptor antibody,1YWH_A,Plasminogen activator receptor,1.07,1139.0,3.0,rigid,,,
+2I25,2I25_N:L,N:L,AS,2I24_N,Shark single domain antigen receptor,3LZT,Lysozyme,1.21,1425.0,3.0,rigid,-12.3,,Kastritis81
+2VIS,2VIS_AB:C,AB:C,AA,1GIG_LH,Fab,2VIU_ACE,Flu virus hemagglutinin,0.8,1296.0,2.0,rigid,-7.4,,Kastritis81
+2VXT,2VXT_HL:I ,HL:I ,AA,2VXU_HL,Murine reference antibody 125-2H FAB,1J0S_A(6),Interleukin-18,1.33,2163.0,5.0,rigid,-12.65,0.533,PierceAbAg
+2W9E,2W9E_HL:A ,HL:A ,AA,2W9D_HL,ICSM 18 FAB fragment,1QM1_A,Prion protein fragment,1.13,1677.0,5.0,rigid,-13.49,0.13,PierceAbAg
+3EOA,3EOA_LH:I ,LH:I ,AA,3EO9_LH,Efalizumab FAB fragment,3F74_A,Integrin alpha-L I domain,0.39,1272.0,5.0,rigid,-11.81,2.2,PierceAbAg
+3HMX,3HMX_LH:AB ,LH:AB ,AA,3HMW_LH,Ustekinumab FAB,1F45_AB,Interleukin-12,0.73,1841.0,5.0,rigid,,,
+3MJ9,3MJ9_HL:A,HL:A,AA,3MJ8_HL,HL4E10,3MJ6_A,JAML,1.48,2457.0,5.5,rigid,-11.05,8.0,PierceAbAg
+3MXW,3MXW_LH:A ,LH:A ,AA,3MXV_LH,Anti-Shh 5E1 chimera FAB fragment,3M1N_A,Sonic Hedgehog N-terminal domain,0.48,1696.0,5.0,rigid,-11.31,7.0,PierceAbAg
+3RVW,3RVW_CD:A ,CD:A ,AA,3RVT_CD,4C1 FAB,3F5V_A,DER P 1 allergen,0.5,1383.0,5.0,rigid,-10.53,19.0,PierceAbAg
+3SE8,3SE8_HL:G,HL:G,AA,5JXA_HL,VRC03,3TGT_A,HIV 93TH057 gp120,1.22,2690.0,5.5,rigid,,,
+3U7Y,3U7Y_HL:G,HL:G,AA,3U7W_HL,NIH45-46,3TGT_A,HIV 93TH057 gp120,0.84,2544.0,5.5,rigid,-9.27,160.0,PierceAbAg
+3WD5,3WD5_HL:ABC,HL:ABC,AA,4NYL_HL,adalimumab (Humira),1TNF_ABC,TNFalpha,0.93,2328.0,5.5,rigid,-13.56,0.115,PierceAbAg
+4DN4,4DN4_LH:M ,LH:M ,AA,4DN3_LH,CNTO888 FAB,1DOL_A,MCP-1,0.81,1317.0,5.0,rigid,-14.22,0.038,PierceAbAg
+4FP8,4FP8_HL:A,HL:A,AA,4FNL_HL,C05,4FNK_ABCDEF,influenza H3 HA,0.34,1322.0,5.5,rigid,-8.83,430.0,PierceAbAg
+4FQI,4FQI_HL:ABEFCD ,HL:ABEFCD ,AA,4FQH_HL,CR9114 FAB,2FK0_ABCDEF,H5N1 influenza virus hemagglutinin,1.08,1459.0,5.0,rigid,-12.55,0.9,PierceAbAg
+4G6J,4G6J_HL:A ,HL:A ,AA,4G5Z_HL,Canakinumab antibody fragment,4I1B_A,Interleukin-1 beta,0.61,1893.0,5.0,rigid,-11.44,4.1,PierceAbAg
+4G6M,4G6M_HL:A ,HL:A ,AA,4G6K_HL,Gevokizumab antibody fragment,4I1B_A,Interleukin-1 beta,0.49,1673.0,5.0,rigid,-13.01,0.29,PierceAbAg
+4GXU,4GXU_MN:ABEFCD ,MN:ABEFCD ,AA,4GXV_HL,1F1 antibody,1RUZ_HIJKLM,1918 H1 Hemagglutinin,0.78,1830.0,5.0,rigid,-11.2,6.2,PierceAbAg
+4M5Z,4M5Z_HL:A,HL:A,AA,4M5Y_HL,5J8,3UYX_A,influenza H1N1 HA1,0.73,1591.0,5.5,rigid,-11.1,10.0,PierceAbAg
+4Y7M,4Y7M_A:C,A:C,AS,4QGY_A,nb25,4Y7L_A,E coli TssM CTD,0.84,1103.0,5.5,rigid,-11.79,1.61,PierceAbAg
+5GRJ,5GRJ_HL:A,HL:A,AA,4NKI_HL,avelumab scFv (Bavencio),4Z18_A,PD-L1,1.14,1753.0,5.5,rigid,-14.15,0.0421,PierceAbAg
+5JMO,5JMO_D:B,D:B,AS,5JMR_A,Nb14,5JXI_A,Furin,0.29,1394.0,5.5,rigid,,,
+5O14,5O14_HL:A,HL:A,AA,5UR8_AB,1A12,3KVD_D,Neisseria meningitidis fHbp,0.63,1524.0,5.5,rigid,-14.62,0.019,PierceAbAg
+5O1R,5O1R_HL:A,HL:A,AA,5NYX_HL,5H2,6CUJ_A,Neisseria meningitidis NHBA,0.9,1852.0,5.5,rigid,,,
+5SV3,5SV3_C:D,C:D,AS,5SV4_A,A3C8,1IFT_A,Ricin,0.57,1294.0,5.5,rigid,-13.92,0.0627,PierceAbAg
+5WK3,5WK3_WV:D,WV:D,AA,5WK2_HL,M116,1NR4_A,CCL17,0.57,1222.0,5.5,rigid,,,
+5WUX,5WUX_HL:EFG,HL:EFG,AA,5WUV_HL,certolizumab (Cimzia),1TNF_CBA,TNFalpha,0.8,2073.0,5.5,rigid,-14.41,0.0274,PierceAbAg
+5X0T,5X0T_AB:E,AB:E,AA,5X4G_AB,6H8,3B5H_A,CD147,1.25,1316.0,5.5,rigid,,,
+5Y9J,5Y9J_HL:ABC,HL:ABC,AA,5Y9K_HL,belimumab (Benlysta),1KXG_ABC,B lymphocyte stimulator,0.96,1976.0,5.5,rigid,-12.28,0.995,PierceAbAg
+6A77,6A77_HL:A,HL:A,AA,6A76_HL,B5209B,5O5I_A,ROBO1 Ig5,0.95,1533.0,5.5,rigid,,,
+6B0S,6B0S_HL:C,HL:C,AA,6B0W_HL,1710 Fab fragment,3VDJ_A,circumsporozoite protein aTSR domain,0.72,1353.0,5.5,rigid,-9.11,178.0,PierceAbAg
+6BPC,6BPC_EF:D,EF:D,AA,6BPB_AB,4F7,5W53_A,Plasmodium vivax reticulocyte-binding protein 2b,0.47,1645.0,5.5,rigid,,,
+6CWG,6CWG_B:A,B:A,AS,6CWK_A,A9,1IFT_A,Ricin,0.76,1151.0,5.5,rigid,-13.64,0.1,PierceAbAg
+6DBG,6DBG_C:B,C:B,AS,6DBA_A,R303,1H6T_A,Listeria monocytogenes internalin B,0.46,1525.0,5.5,rigid,-13.4,0.15,PierceAbAg
+6OC3,6OC3_AB:F,AB:F,AA,6OBZ_HL,FluA-20,6CHX_A,H1 hemagglutinin head,0.59,1537.0,5.5,rigid,,,
+1AVX,1AVX_A:B,A:B,EI,1QQU_A,Porcine trypsin,1BA7_B,Soybean trypsin inhibitor,0.47,1585.0,2.0,rigid,,,
+1AY7,1AY7_A:B,A:B,EI,1RGH_B,RNase Sa,1A19_B,Barstar,0.54,1237.0,2.0,rigid,,,
+1BUH,1BUH_A:B,A:B,EI,1HCL_,CDK2 kinase,1DKS_A,Ckshs1,0.75,1324.0,2.0,rigid,-9.7,,Kastritis81
+1BVN,1BVN_P:T,P:T,EI,1PIG_,α-amylase,1HOE_,Tendamistat,0.87,2222.0,2.0,rigid,-15.1,,Kastritis81
+1CLV,1CLV_A:I,A:I,EI,1JAE_A,α-amylase,1QFD_A(1),α-amylase inhibitor,0.86,2087.0,4.0,rigid,,,
+1D6R,1D6R_A:I,A:I,EI,2TGT_,Bovine trypsin,1K9B_A,Bowman-Birk inhibitor,1.14,1408.0,2.0,rigid,,,
+1DFJ,1DFJ_E:I,E:I,EI,9RSA_B,Ribonuclease A,2BNH_,Rnase inhibitor,1.02,2582.0,2.0,rigid,,,
+1E6E,1E6E_A:B,A:B,ES,1E1N_A,Adrenoxin reductase,1CJE_D,Adrenoxin,0.96,2315.0,2.0,rigid,-8.3,,Kastritis81
+1EAW,1EAW_A:B,A:B,EI,1EAX_A,Matriptase,9PTI_,BPTI,0.54,1866.0,2.0,rigid,,,
+1EWY,1EWY_A:C,A:C,ES,1GJR_A,Ferredoxin reductase,1CZP_A,Ferredoxin,0.8,1502.0,2.0,rigid,-7.4,,Kastritis81
+1EZU,1EZU_C:AB   *,C:AB   *,EI,1TRM_A,D102N Trypsin,1ECZ_AB,Ecotin,1.21,2751.0,2.0,rigid,-13.8,,Kastritis81
+1F34,1F34_A:B,A:B,EI,4PEP_,Porcine pepsin,1F32_A,Ascaris inhibitor 3,0.93,3038.0,2.0,rigid,,,
+1F51,1F51_AB:E,AB:E,ER,1IXM_AB,Sporulation response factor B,1SRR_C,Sporulation response factor F,0.74,2407.0,2.0,rigid,,,
+1FLE,1FLE_E:I,E:I,EI,9EST_A,Elastase,2REL_A(4),Elafin,1.02,1763.0,4.0,rigid,,,
+1GL1,1GL1_A:I,A:I,EI,1K2I_1,α-chymotrypsin,1PMC_A(6),Protease inhibitor LCMI II,1.21,1591.0,4.0,rigid,,,
+1GLA,1GLA_G:F,G:F,ER,1BU6_O,Glycerol Kinase,1F3Z_A,Glucose specific phosphocarrier,0.98,1304.0,3.0,rigid,-6.8,,Kastritis81
+1GXD,1GXD_A:C,A:C,EI,1CK7_A,proMMP2 type IV collagenase,1BR9_A,Metalloproteinase inhibitor 2,1.39,2445.0,4.0,rigid,-11.7,,Kastritis81
+1HIA,1HIA_AB:I,AB:I,EI,2PKA_XY,Kallikrein,1BX8_,Hirustatin,1.4,1737.0,2.0,rigid,,,
+1JTD,1JTD_B:A ,B:A ,EI,3QI0_A,BLIP-II,1BTL_A,TEM-1 beta-lactamase,0.44,2180.0,5.0,rigid,,,
+1JTG,1JTG_B:A,B:A,EI,3GMU_B,β-lactamase inhibitor protein,1ZG4_A,β-lactamase TEM-1,0.49,2600.0,4.0,rigid,-12.8,,Kastritis81
+1JWH,1JWH_CD:A,CD:A,ER,3EED_AB,Casein kinase II β chain,3C13_A,Casein kinase II α chain,1.27,1452.0,4.0,rigid,-11.1,,Kastritis81
+1MAH,1MAH_A:F,A:F,EI,1J06_B,Acetylcholinesterase,1FSC_,Fasciculin,0.61,2145.0,2.0,rigid,,,
+1OC0,1OC0_A:B,A:B,ER,1B3K_A,Plasminogen activator inhibitor-1,2JQ8_A(4),Vitronectin Somatomedin B domain,1.0,1313.0,4.0,rigid,,,
+1OPH,1OPH_A:B,A:B,EI,1QLP_A,α-1-antitrypsin,1UTQ_A,Trypsinogen,1.21,1360.0,3.0,rigid,,,
+1OYV,1OYV_A:I,A:I,EI,1SCD_A,Subtilisin Carlsberg,1PJU_A,Two-headed tomato inhibitor-II,0.7,1930.0,4.0,rigid,,,
+1OYV,1OYV_B:I,B:I,EI,1SCD_A,Subtilisin Carlsberg,1PJU_A,Two-headed tomato inhibitor-II,0.47,1280.0,4.0,rigid,,,
+1PPE,1PPE_E:I,E:I,EI,1BTP_,Bovine trypsin,1LU0_A,CMTI-1 squash inhibitor,0.44,1688.0,2.0,rigid,-15.6,,Kastritis81
+1R0R,1R0R_E:I,E:I,EI,1SCN_E,Subtilisin carlsberg,2GKR_I,OMTKY,0.45,1409.0,3.0,rigid,-14.2,,Kastritis81
+1TMQ,1TMQ_A:B,A:B,EI,1JAE_,alpha-amylase,1B1U_A,RAGI inhibitor,0.86,2401.0,2.0,rigid,,,
+1UDI,1UDI_E:I,E:I,EI,1UDH_,Uracyl-DNA glycosylase,2UGI_B,Glycosylase inhibitor,0.9,2022.0,2.0,rigid,,,
+1US7,1US7_A:B,A:B,ER,2FXS_A,Heat shock protein 82 N-ter domain,2W0G_A,HSP 90 co-chaperone CDC37 C-ter domain,1.06,1095.0,4.0,rigid,-8.1,,Kastritis81
+1WDW,1WDW_BD:A,BD:A,ER,1V8Z_AB,Tryptophan synthase β chain 1,1GEQ_A,Tryptophan synthase α chain,1.29,3148.0,4.0,rigid,,,
+1YVB,1YVB_A:I,A:I,EI,2GHU_A,Falcipain 2,1CEW_I,Cystatin,0.51,1743.0,3.0,rigid,,,
+1Z5Y,1Z5Y_D:E,D:E,ES,1L6P,N-term of DsbD,2B1K_A,E.coli CCMG protein,1.23,1346.0,3.0,rigid,,,
+2A1A,2A1A_B:A ,B:A ,ES,3UIU_A,Eukayotic translation initiation  factor 2-alpha kinase 2,1Q46_A,eIF2 alpha subunit,1.35,1186.0,5.0,rigid,,,
+2A9K,2A9K_A:B,A:B,ES,1U90_A,Ras-related protein Ral-A,2C8B_X,Mono-ADP-ribosyltransferase C3,0.85,1751.0,4.0,rigid,-10.2,,Kastritis81
+2ABZ,2ABZ_B:E,B:E,EI,3I1U_A,Carboxypeptidase A1,1ZFI_A(1),Leech carboxypeptidase inhibitor,0.9,1443.0,4.0,rigid,-11.7,,Kastritis81
+2AYO,2AYO_A:B,A:B,ER,2AYN_A,Ubiquitin carboxyl-terminal hydrolase 14,2FCN_A,Ubiquitin,1.39,3027.0,4.0,rigid,,,
+2B42,2B42_B:A,B:A,EI,2DCY_A,Xylanase,1T6E_X,Xylanase inhibitor,0.72,2520.0,3.0,rigid,,,
+2GAF,2GAF_D:A ,D:A ,ER,3OWG_A,Poly(A) polymerase VP55,1VPT_A,Vaccinia protein VP39,0.69,3368.0,5.0,rigid,,,
+2J0T,2J0T_A:D,A:D,EI,966C_A,MMP1 Intersitial collagenase,1D2B_A(20),Metalloproteinase inhibitor 1,1.23,1477.0,4.0,rigid,,,
+2MTA,2MTA_HL:A,HL:A,ES,2BBK_JM,Methylamine dehydrogenase,2RAC_A,Amicyanin,0.41,1461.0,2.0,rigid,-7.4,,Kastritis81
+2O8V,2O8V_A:B,A:B,ES,1SUR_A,PAPS reductase,2TRX_A,Thioredoxin,1.37,1619.0,3.0,rigid,,,
+2OOB,2OOB_A:B,A:B,ES,2OOA_A,Ubiquitin ligase,1YJ1_A,Ubiquitin,0.85,808.0,3.0,rigid,-5.7,,Kastritis81
+2OOR,2OOR_AB:C,AB:C,ER,1L7E_AB,NAD(P) transhydrogenase subunit α part 1,1E3T_A,NAD(P) transhydrogenase subunit beta,1.42,2065.0,4.0,rigid,,,
+2OUL,2OUL_A:B,A:B,EI,3BPF_A,Falcipain 2,2NNR_A,Chagasin,0.53,1933.0,4.0,rigid,,,
+2PCC,2PCC_A:B,A:B,ES,1CCP_,Cyt C peroxidase,1YCC_,Cytochrome C,0.39,1141.0,2.0,rigid,-7.9,,Kastritis81
+2SIC,2SIC_E:I,E:I,EI,1SUP_,Subtilisin,3SSI_,Streptomyces subtilisin inhibitor,0.36,1617.0,2.0,rigid,,,
+2SNI,2SNI_E:I,E:I,EI,1UBN_A,Subtilisin,2CI2_I,Chymotrypsin inhibitor 2,0.35,1628.0,2.0,rigid,,,
+2UUY,2UUY_A:B,A:B,EI,1HJ9_A,Trypsin,2UUX_A,Tryptase inhibitor from tick,0.43,1280.0,3.0,rigid,,,
+2YVJ,2YVJ_A:B ,A:B ,ER,2YVF_A,Ferredoxin reductase BPHA4,2E4P_A,Biphenyl dioxygenase ferredoxin subunit,0.6,1377.0,5.0,rigid,,,
+3A4S,3A4S_A:D ,A:D ,EI,1A3S_A,SUMO-conjugating enzyme UBC9,3A4R_A,NFATC2-interacting protein SLD2 ubiquitin-like domain,0.72,1116.0,5.0,rigid,,,
+3K75,3K75_D:B ,D:B ,ER,1BPB_A,DNA polymerase beta,3K77_A,"Reduced XRCC1, N-terminal domain",0.64,1195.0,5.0,rigid,,,
+3LVK,3LVK_AC:B ,AC:B ,ER,3LVM_AB,Cysteine desulfurase IscS,1DCJ_A(12),Sulfurtransferase tusA,0.81,1609.0,5.0,rigid,,,
+3PC8,3PC8_A:C ,A:C ,ER,3PC6_A,DNA repair protein XRCC1,3PC7_A,DNA ligase III-alpha BRCT domain,0.5,1240.0,5.0,rigid,,,
+3SGQ,3SGQ_E:I,E:I,EI,2QA9_E,Streptogrisin B,2OVO_A,Ovomucoid inhibitor third domain,0.39,1211.0,4.0,rigid,,,
+3VLB,3VLB_A:B ,A:B ,EI,3VLA_A,EDGP,3VL8_A,"Xyloglucan-specific endo-beta-1,4-glucanase A",0.51,2020.0,5.0,rigid,,,
+4CPA,4CPA_A:I,A:I,EI,8CPA_A,Carboxypeptidase A,1H20_A(9),Potato carboxypeptidase inhibitor,0.62,1175.0,4.0,rigid,-11.3,,Kastritis81
+4H03,4H03_A:B ,A:B ,ES,1GIQ_A,Iota toxin component IA,1IJJ_A,Alpha actin,0.68,1474.0,5.0,rigid,,,
+4HX3,4HX3_BD:A ,BD:A ,EI,4HWX_AB,Neutral proteinase inhibitor ScNPI,1C7K_A,Zinc endoprotease,0.9,2086.0,5.0,rigid,,,
+7CEI,7CEI_A:B,A:B,EI,1UNK_D,Colicin E7 nuclease,1M08_B,Im7 immunity protein,0.7,1384.0,2.0,rigid,,,
+1A2K,1A2K_C:AB,C:AB,OG,1QG4_A,Ran GTPase,1OUN_AB,Nuclear transport factor 2,1.11,1603.0,2.0,rigid,-9.3,,Kastritis81
+1AK4,1AK4_A:D,A:D,OX,2CPL_,Cyclophilin,4J93_A,HIV capsid,0.87,1029.0,2.0,rigid,-6.4,,Kastritis81
+1AKJ,1AKJ_AB:DE,AB:DE,OX,2CLR_DE,MHC class 1 HLA-A2,1CD8_AB,T-cell CD8 coreceptor,1.14,1995.0,2.0,rigid,-5.3,,Kastritis81
+1AZS,1AZS_AB:C,AB:C,OG,1AB8_AB,Adenylyl cyclase,1AZT_A,AC activator Gs α complex,0.72,1911.0,3.0,rigid,,,
+1E96,1E96_A:B,A:B,OG,1MH1_,Rac GTPase,1HH8_A,p67 Phox,0.71,1179.0,2.0,rigid,-7.4,,Kastritis81
+1EFN,1EFN_B:A,B:A,OX,1AVV_A,HIV-1-NEF protein,1G83_A,SH3 domain,0.77,1254.0,3.0,rigid,-10.1,,Kastritis81
+1EXB,1EXB_ABDC:EGFH ,ABDC:EGFH ,OX,1QRQ_ABCD,KV beta2 protein beta subunit,1QDV_ABCD,KV1.2  potassium channel N-terminal domain,0.62,3558.0,5.0,rigid,,,
+1FCC,1FCC_AB:C,AB:C,OX,1FC1_AB,Fc domain of IgG1 MO61,2IGG_A(3),Strep. protein G C2 fragment,0.93,1354.0,4.0,rigid,,,
+1FFW,1FFW_A:B,A:B,OX,3CHY_A,Chemotaxis protein CheY,1FWP_A,Chemotaxis protein CheA,1.43,1166.0,4.0,rigid,-8.1,,Kastritis81
+1FQJ,1FQJ_A:B,A:B,OG,1TND_C,Gt-alpha,1FQI_A,RGS9,0.91,1806.0,2.0,rigid,,,
+1GCQ,1GCQ_B:C,B:C,OX,1GRI_B,GRB2 C-ter SH3 domain,1GCP_B,Vav N-ter SH3 domain,0.92,1208.0,2.0,rigid,-6.5,,Kastritis81
+1GHQ,1GHQ_A:B,A:B,OR,1C3D_,Complement C3,1LY2_A,Epstein-Barr virus receptor CR2,0.34,800.0,2.0,rigid,,,
+1GPW,1GPW_A:B,A:B,OX,1THF_D,HISF protein,1K9V_F,Amidotransferase HISH,0.65,2097.0,3.0,rigid,,,
+1H9D,1H9D_A:B,A:B,OX,1EAN_A,Runx1 domain of CBFα1,1ILF_A(1),Dimerisation domain of CBF-β,1.32,2121.0,4.0,rigid,,,
+1HCF,1HCF_AB:X,AB:X,OR,1B98_AM,Neurotrophin-4,1WWB_X,TrkB-d5 growth factor receptor,0.88,2136.0,4.0,rigid,,,
+1HE1,1HE1_C:A,C:A,OG,1MH1_,Rac GTPase,1HE9_A,Pseudomonas toxin GAP dom.,0.93,2113.0,2.0,rigid,,,
+1I4D,1I4D_D:AB,D:AB,OG,1MH1_,Rac GTPase,1I49_AB,Arfaptin,1.41,1657.0,2.0,rigid,-7.5,,Kastritis81
+1J2J,1J2J_A:B,A:B,OG,1O3Y_A,Arf1 GTPase,1OXZ_A,GAT domain of GGA1,0.63,1209.0,3.0,rigid,-8.1,,Kastritis81
+1K74,1K74_AB:DE,AB:DE,OR,1MZN_AB,RXR-α,1ZGY_AB,PPAR-gamma,0.8,2200.0,3.0,rigid,,,
+1KAC,1KAC_A:B,A:B,OR,1NOB_F,Adenovirus fiber knob protein,1F5W_B,Adenovirus receptor,0.95,1456.0,2.0,rigid,-10.7,,Kastritis81
+1KLU,1KLU_AB:D,AB:D,OX,1H15_AB,MHC class 2 HLA-DR1,1STE_,Staphylococcus enterotoxin C3,0.43,1254.0,2.0,rigid,,,
+1KTZ,1KTZ_A:B,A:B,OR,1TGK_,TGF-β,1M9Z_A,TGF-β receptor,0.39,989.0,2.0,rigid,-8.9,,Kastritis81
+1KXP,1KXP_A:D,A:D,OX,1IJJ_B,Actin,1KW2_B,Vitamin D binding protein,1.12,3341.0,2.0,rigid,,,
+1M27,1M27_AB:C ,AB:C ,OX,1D4T_AB,SAP-SLAM Complex,3UA6_A,Fyn kinase SH3 domain,1.22,799.0,5.0,rigid,,,
+1ML0,1ML0_AB:D,AB:D,OR,1MKF_AB,Viral chemokine binding p. M3,1DOL_,Chemokine Mcp1,1.02,2069.0,2.0,rigid,,,
+1OFU,1OFU_XY:A,XY:A,OX,1OFT_AB,SulA (PA3008),2VAW_A,Cell division protein FtsZ,1.1,1583.0,4.0,rigid,,,
+1PVH,1PVH_A:B,A:B,OR,1BQU_A,IL6 receptor β chain D2-D3 domains,1EMR_A,Leukemia inhibitory factor,0.34,1403.0,4.0,rigid,-9.5,,Kastritis81
+1QA9,1QA9_A:B,A:B,OX,1HNF_,CD2,1CCZ_A,CD58,0.73,1353.0,2.0,rigid,-7.2,,Kastritis81
+1RLB,1RLB_ABCD:E,ABCD:E,OX,2PAB_ABCD,Transthyretin,1HBP_,Retinol binding protein,0.66,1439.0,2.0,rigid,,,
+1RV6,1RV6_VW:X,VW:X,OR,1FZV_AB,PIGF receptor binding domain,1QSZ_A,Flt1 protein domain 2,1.09,1626.0,4.0,rigid,,,
+1S1Q,1S1Q_A:B,A:B,OX,2F0R_A,UEV domain,1YJ1_A,Ubiquitin,0.98,1288.0,3.0,rigid,-4.3,,Kastritis81
+1SBB,1SBB_A:B,A:B,OR,1BEC_,T-cell receptor β,1SE4_,Staphylococcus enterotoxin B,0.37,1064.0,2.0,rigid,,,
+1T6B,1T6B_X:Y,X:Y,OR,1ACC_A,Anthrax protective antigen,1SHU_X,Anthrax toxin receptor,0.62,1948.0,3.0,rigid,,,
+1XD3,1XD3_A:B,A:B,OX,1UCH,UCH-L3,1YJ1_A,Ubiquitin,1.24,2281.0,3.0,rigid,,,
+1XU1,1XU1_ABD:T,ABD:T,OR,1U5Y_ABD,TNF domain of APRIL,1XUT_A(11),TNF receptor superfamily member 13B TACI CRD2 domain,1.3,1697.0,4.0,rigid,-11.2,,Kastritis81
+1Z0K,1Z0K_A:B,A:B,OG,2BME_A,Rab4A GTPase,1YZM_A,RAB4 binding domain of Rabenosyn,0.53,1787.0,3.0,rigid,-7.0,,Kastritis81
+1ZHH,1ZHH_A:B,A:B,OR,1JX6_A,Autoinducer 2-binding periplasmic protein LuxP,2HJE_A,Autoinducer 2 sensor kinase/phosphatase LuxQ,1.31,2189.0,4.0,rigid,,,
+1ZHI,1ZHI_A:B,A:B,OX,1M4Z_A,BAH domain of Orc1,1Z1A_A,Sir Orc-interaction domain,0.68,1322.0,3.0,rigid,-9.1,,Kastritis81
+2A5T,2A5T_A:B,A:B,OX,1Y20_A,NMDA receptor R1-4A subunit ligand-binding core,2A5S_A,NMDA receptor R2A subunit ligand-binding core,1.28,1892.0,4.0,rigid,,,
+2AJF,2AJF_A:E,A:E,OR,1R42_A,ACE2,2GHV_E,SARS spike protein receptor binding domain,0.65,1704.0,3.0,rigid,-10.6,,Kastritis81
+2B4J,2B4J_AB:C,AB:C,OX,1BIZ_AB,Integrase (HIV-1),1Z9E_A(1),PC4 and SFRS1 interacting protein,0.99,1273.0,4.0,rigid,,,
+2BTF,2BTF_A:P,A:P,OX,1IJJ_B,Actin,1PNE_,Profilin,0.75,2063.0,2.0,rigid,,,
+2FJU,2FJU_B:A,B:A,OG,2ZKM_X,Phospholipase β 2,1MH1_A,Rac GTPase,1.04,1245.0,4.0,rigid,-7.2,,Kastritis81
+2G77,2G77_A:B,A:B,OG,1FKM_A,GTPase-activating protein GYP1,1Z06_A,Ras-related protein Rab-33B,1.08,2524.0,4.0,rigid,,,
+2GTP,2GTP_A:D ,A:D ,OG,1GFI_A,"Alpha-1 subunit Guanine nucleotide-binding protein G(I), alpha-1 subunit",2BV1_A,RGS1,0.54,1442.0,5.0,rigid,,,
+2HLE,2HLE_A:B,A:B,OR,2BBA_A,Ephrin B4 receptor,1IKO_P,Ephrin B2 ectodomain,1.4,2116.0,3.0,rigid,,,
+2HQS,2HQS_A:H,A:H,OX,1CRZ_A,TolB,1OAP_A,Pal,0.97,2333.0,3.0,rigid,-10.2,,Kastritis81
+2VDB,2VDB_A:B,A:B,OX,3CX9_A,Serum albumin,2J5Y_A,Peptostreptococcal albumin-binding protein,0.47,1798.0,4.0,rigid,,,
+2X9A,2X9A_D:C ,D:C ,OR,1S62_A(8),TolA C-terminal domain,2X9B_A,G3P TolA binding domain,1.33,1571.0,5.0,rigid,,,
+3BIW,3BIW_A:E ,A:E ,OX,3BIX_A,Neuroligin-1,2R1D_A,Neuroligin-1-beta,0.39,1191.0,5.0,rigid,,,
+3BP8,3BP8_AB:C,AB:C,OX,1Z6R_AB,Mlc transcription regulator,3BP3_A,PTS glucose-specific enzyme EIICB,0.45,1391.0,4.0,rigid,,,
+3D5S,3D5S_A:C,A:C,OX,1C3D_A,Complement C3d fragment,2GOM_A,Fibrinogen-binding protein C-ter domain,0.56,1620.0,4.0,rigid,,,
+3H2V,3H2V_A:E ,A:E ,OX,3MYI_A,Vinculin tail domain,1WI6_A(8),Raver1 RRM1 domain,0.8,1263.0,5.0,rigid,,,
+3P57,3P57_AB:P ,AB:P ,OX,3KOV_AB,MEF2A,3IO2_A,p300 TAZ2 domain,0.53,1291.0,5.0,rigid,,,
+3P57,3P57_CD:P ,CD:P ,OX,3KOV_AB,MEF2A,3IO2_A,p300 TAZ2 domain,0.74,1177.0,5.0,rigid,,,
+3P57,3P57_IJ:P ,IJ:P ,OX,3KOV_AB,MEF2A,3IO2_A,p300 TAZ2 domain,0.91,1126.0,5.0,rigid,,,
+4M76,4M76_A:B ,A:B ,OR,1C3D_A,C3D,1M1U_A,Integrin alpha-M CD11B A-domain,0.43,1046.0,5.0,rigid,,,
+2DD8,2DD8_HL:S,HL:S,AA,2G75_AB,m396,2GHV_E,SARS spike,2.19,1710.0,5.5,medium,-10.5,20.0,PierceAbAg
+3EO1,3EO1_AB:CF ,AB:CF ,AA,3EO0_AB,GC-1008  FAB fragment,1TGJ_AB,Transforming Growth Factor-Beta 3,1.37,1630.0,5.0,rigid,,,
+3G6D,3G6D_LH:A ,LH:A ,AA,3G6A_LH,CNTO607 FAB,1IK0_A(10),Interleukin-13,1.86,1793.0,5.0,medium,-14.65,0.0184,PierceAbAg
+3HI6,3HI6_XY:B ,XY:B ,AA,3HI5_HL,AL-57 FAB fragment,1MJN_A,Integrin alpha-L I domain,1.65,1871.0,5.0,medium,-7.27,4700.0,PierceAbAg
+3L5W,3L5W_LH:I ,LH:I ,AA,3L7E_LH,C836 FAB,1IK0_A(11),Interleukin-13,0.48,1138.0,5.0,rigid,-14.01,0.54,PierceAbAg
+3RJQ,3RJQ_B:A,B:A,AA,3R0M_A,A12,3TGR_A,C1086 HIV gp120,0.79,1734.0,5.5,rigid,,,
+3V6Z,3V6Z_AB:F ,AB:F ,AA,3V6F_AB,FAB E6,3KXS_F,Capsid protein assembly domain,1.83,1922.0,5.0,medium,-11.57,3.3,PierceAbAg
+4ETQ,4ETQ_HL:C,HL:C,AA,4EBQ_HL,LA5,4E9O_X,vaccinia D8L IMV,0.47,2278.0,5.5,rigid,-13.29,0.18,PierceAbAg
+4M3K,4M3K_B:A,B:A,AS,4M3J_A,cAb-H7S,4BLM_A,B. licheniformis beta-lactamase,1.77,1588.0,5.5,medium,,,
+4POU,4POU_B:A,B:A,AS,4POY_A,VHHmetal,6ETL_A,bovine RNase A,1.83,1313.0,5.5,medium,-9.28,157.0,PierceAbAg
+5CBA,5CBA_AB:E,AB:E,AA,5C2B_HL,3B4 scFv,4ZAI_A,CXCL13,1.49,1790.0,5.5,rigid,-13.38,0.3715,PierceAbAg
+5E5M,5E5M_B:A,B:A,AS,5E03_A,H11,5E56_A,mouse CTLA-4,1.56,1341.0,5.5,medium,,,
+5HGG,5HGG_T:A,T:A,AS,5HDO_A,Nb4,4FUD_A,uPA,0.84,1969.0,5.5,rigid,-14.01,0.054,PierceAbAg
+5HYS,5HYS_CD:JK,CD:JK,AA,2XA8_HL,omalizumab (Xolair),4GT7_AB,IgE-Fc3-4,1.0,1332.0,5.5,rigid,-10.91,10.0,PierceAbAg
+5KOV,5KOV_C:AB,C:AB,AA,5I30_HL,PL-2 scFv,5KOU_AB,astrovirus 2 capsid protein spike domain,1.69,1735.0,5.5,medium,-11.91,1.87,PierceAbAg
+5VNW,5VNW_D:A,D:A,AS,5VNV_A,Nb.b201,1E78_A,human serum albumin,1.49,967.0,5.5,rigid,-8.68,430.0,PierceAbAg
+5WHK,5WHK_HL:AB,HL:AB,AA,5WHJ_HL,DX-2507,5BXF_AB,FcRn-B2M,1.88,1850.0,5.5,medium,-11.93,1.81,PierceAbAg
+6A0Z,6A0Z_HL:A,HL:A,AA,6A0X_AB,13D4,2FK0_A,H5N1 hemagglutinin head,1.28,1661.0,5.5,rigid,-9.92,53.0,PierceAbAg
+6AL0,6AL0_HL:A,HL:A,AA,4YNY_AB,NZ-1,6AKQ_A,A. aeolicus site-2 protease homolog with PA tag insertion,1.89,1623.0,5.5,medium,,,
+6EY6,6EY6_I:AB,I:AB,AS,5FWO_A,nb130,6EY5_AB,P. gingivalis PorM,1.9,1807.0,5.5,medium,-11.05,8.0,PierceAbAg
+1CGI,1CGI_E:I,E:I,EI,2CGA_B,Bovine chymotrypsinogen,1HPT_,PSTI,2.02,2053.0,2.0,medium,,,
+1IJK,1IJK_A:BC,A:BC,ER,1AUQ_,Von Willebrand Factor dom. A1,1FVU_AB,Botrocetin,0.68,1648.0,2.0,rigid,,,
+1JIW,1JIW_P:I,P:I,EI,1AKL_A,Alkaline metalloproteinase,2RN4_A(1),Proteinase inhibitor,2.07,1997.0,4.0,medium,,,
+1KKL,1KKL_ABC:H,ABC:H,ES,1JB1_ABC,HPr kinase C-ter domain,2HPR_,HPr,2.2,1641.0,2.0,difficult,-10.0,,Kastritis81
+1M10,1M10_A:B,A:B,ER,1AUQ_,Von willebrand factor dom. A1,1M0Z_B,Glycoprotein IB-α,2.1,2097.0,2.0,medium,-11.2,,Kastritis81
+1NW9,1NW9_B:A,B:A,ER,1JXQ_A,Capase-9,2OPY_A,BIR3-XIAP,1.97,2112.0,3.0,medium,,,
+1R6Q,1R6Q_A:C,A:C,ER,1R6C_X,Clp protease subunit ClpA,2W9R_A,Clp protease adaptor protein ClpS,1.67,1651.0,4.0,medium,,,
+1ZM4,1ZM4_A:B,A:B,ES,1N0V_C,Elongation factor 2,1XK9_A,Diphtheria toxin A catalytic domain,2.11,1554.0,4.0,medium,,,
+2NZ8,2NZ8_A:B,A:B,ER,1MH1_,Rac GTPase,1NTY_A,DH/PH domain of TRIO,2.13,2599.0,3.0,medium,,,
+2Z0E,2Z0E_A:B,A:B,ER,2D1I_A,Cysteine protease Atg4B,1V49_A(1),Microtubule-associated proteins 1A/1B light chain 3B,2.15,2478.0,4.0,medium,,,
+4FZA,4FZA_A:B ,A:B ,ER,1UPL_A,MO25 alpha,3GGF_A,Serine/threonine-protein kinase MST4,2.04,1695.0,5.0,medium,,,
+4IZ7,4IZ7_A:B ,A:B ,EI,1ERK_A,Non-phosphorylated ERK,2LS7_A(1),PEA-15 Death Effector Domain,1.56,1202.0,5.0,medium,,,
+4LW4,4LW4_AB:C ,AB:C ,ES,4LW2_AB,Cysteine desulfurase CsdA,1NI7_A(8),Cysteine desulfuration protein CsdE,1.6,1610.0,5.0,medium,,,
+1B6C,1B6C_A:B,A:B,OX,1D6O_A,FKBP binding protein,1IAS_A,TGFbeta receptor,1.96,1752.0,2.0,medium,-8.9,,Kastritis81
+1FC2,1FC2_C:D,C:D,OX,1BDD_,Staphylococcus Protein A,1FC1_AB,Human Fc fragment,1.69,1307.0,2.0,medium,-10.4,,Kastritis81
+1GP2,1GP2_A:BG,A:BG,OG,1GIA_,Gi-α,1TBG_DH,"Gi-β, γ",1.65,2287.0,2.0,medium,,,
+1GRN,1GRN_A:B    *,A:B    *,OG,1A4R_A,CDC42 GTPase,1RGP_,CDC42 GAP,1.22,2332.0,2.0,rigid,,,
+1HE8,1HE8_B:A,B:A,OG,821P_,Ras GTPase,1E8Z_A,PIP3 kinase,0.92,1305.0,2.0,rigid,-7.4,,Kastritis81
+1I2M,1I2M_A:B,A:B,OG,1QG4_A,Ran GTPase,1A12_A,RCC1,2.12,2779.0,2.0,medium,-15.8,,Kastritis81
+1IB1,1IB1_AB:E,AB:E,OX,1QJB_AB,14-3-3 protein,1KUY_A,Serotonin N-acteylase,2.09,2808.0,2.0,medium,,,
+1K5D,1K5D_AB:C,AB:C,OG,1RRP_AB,Ran GTPase,1YRG_B,Ran GAP,1.19,2527.0,2.0,rigid,-12.8,,Kastritis81
+1LFD,1LFD_B:A,B:A,OG,5P21_A,Ras,1LXD_A,RalGDS Ras-interacting domain,1.79,1167.0,4.0,medium,-7.8,,Kastritis81
+1MQ8,1MQ8_A:B,A:B,OX,1IAM_A,ICAM-1 domain 1-2,1MQ9_A,Integrin α-L I domain,1.76,1253.0,4.0,medium,-7.5,,Kastritis81
+1N2C,1N2C_ABCD:EF,ABCD:EF,OX,3MIN_ABCD,Nitrogenase Mo-Fe protein,2NIP_AB,Nitrogenase Fe protein,2.13,3635.0,2.0,medium,,,
+1SYX,1SYX_A:B,A:B,OX,1QGV_A,Spliceosomal U5 15 kDa protein,1L2Z_A(1),CD2 receptor binding protein 2 C-ter fragment,1.64,1293.0,4.0,medium,,,
+1WQ1,1WQ1_R:G    *,R:G    *,OG,6Q21_D,Ras GTPase,1WER_,Ras GAP,1.16,2913.0,2.0,rigid,,,
+1XQS,1XQS_A:C,A:C,OX,1XQR_A,HspBP1,1S3X_A,Hsp70 ATPase domain,1.77,2350.0,3.0,medium,-7.1,,Kastritis81
+2CFH,2CFH_A:C,A:C,OX,1SZ7_A,BET3,2BJN_A,TPC6,1.55,2384.0,3.0,medium,,,
+2H7V,2H7V_A:C,A:C,OG,1MH1_,Rac GTPase,2H7O_A,YpkA,1.63,1574.0,3.0,medium,,,
+2HRK,2HRK_A:B,A:B,OX,2HRA_A,Glutamyl-t-RNA synthetase,2HQT_A,GU-4 nucleic binding protein,2.03,1595.0,3.0,medium,-11.0,,Kastritis81
+2OZA,2OZA_B:A,B:A,OX,3HEC_A,MAP kinase 14,3FYK_X,MAP kinase-activated protein kinase 2,1.89,6248.0,4.0,medium,,,
+3AAA,3AAA_AB:C ,AB:C ,OX,3AA7_AB,Actin capping protein,1MYO_A(30),Myotrophin,1.78,1686.0,5.0,medium,,,
+3AAD,3AAD_A:D ,A:D ,OX,1EQF_A,Double bromodomain,1TEY_A(13),Histone chaperone ASF1,2.0,1461.0,5.0,medium,,,
+3BX7,3BX7_A:C ,A:C ,OX,3BX8_A,Lipocalin 2,3OSK_A,CTLA-4 extracellular domain,1.63,2349.0,5.0,medium,,,
+3CPH,3CPH_G:A,G:A,OG,3CPI_G,Rab GDP-dissociation inhibitor,1G16_A,Ras-related protein Sec4,2.12,1685.0,4.0,medium,-8.8,,Kastritis81
+3DAW,3DAW_A:B ,A:B ,OX,1IJJ_A,Alpha actin,2HD7_A(5),Twinfilin-1 C-terminal domain,1.49,2323.0,5.0,rigid,,,
+3R9A,3R9A_AC:B ,AC:B ,OR,1H0C_AB,Alanine-glyoxylate aminotransferase,2C0M_A,PEX5P TPR repeat domain,1.91,1926.0,5.0,medium,,,
+3S9D,3S9D_B:A ,B:A ,OR,1N6U_A(15),IFNAR2,1ITF_A(9),IFNa2,1.69,1841.0,5.0,medium,,,
+3SZK,3SZK_DE:F ,DE:F ,OX,3ODQ_AB,MetHaemoglobin,2H3K_A,ISDH-N1,2.1,1263.0,5.0,medium,,,
+4JCV,4JCV_ADBC:E ,ADBC:E ,OX,1VDD_ABCD,Recombinational repair protein RecR,1W3S_A,DNA repair protein RecO,1.62,1949.0,5.0,medium,,,
+2FJG,2FJG_HL:VW,HL:VW,AA,2FJF_HL,G6,4KZN_AB,VEGF,2.51,1678.0,5.5,difficult,-10.92,20.0,PierceAbAg
+4DW2,4DW2_HL:U,HL:U,AA,4DVB_AB,mAb-112,4DVA_U,uPA,2.27,2038.0,5.5,difficult,,,
+5C7X,5C7X_HL:A,HL:A,AA,5D7S_HL,MOR04357,2GMF_A,GM-CSF,2.31,2523.0,5.5,difficult,-15.22,0.007,PierceAbAg
+1ACB,1ACB_E:I,E:I,EI,2CGA_B,Chymotrypsin,1EGL_,Eglin C,2.26,1544.0,2.0,difficult,-13.1,,Kastritis81
+1F6M,1F6M_A:C,A:C,ES,1CL0_A,Thioredoxin reductse,2TIR_A,Thioredoxin 1,4.9,1821.0,4.0,difficult,,,
+1FQ1,1FQ1_A:B,A:B,ES,1B39_A,CDK2 kinase,1FPZ_F,CDK inhibitor 3,3.41,1832.0,2.0,difficult,,,
+1JK9,1JK9_B:A,B:A,ES,1QUP_A,CCS metallochaperone,2JCW_A,SOD1 superoxide dismutase,2.51,2130.0,4.0,difficult,,,
+1JMO,1JMO_A:HL,A:HL,ER,1JMJ_A,Heparin cofactor,2CN0_HL,Thrombin,3.21,3461.0,3.0,difficult,,,
+1JZD,1JZD_AB:C,AB:C,ER,1JZO_AB,DsbC disurfide bond isomerase,1JPE_A,DsbD disulfide bond isomerase,2.71,2026.0,4.0,difficult,,,
+1PXV,1PXV_A:C,A:C,EI,1X9Y_A,Cystein protease,1NYC_A,Cystein protease inhibitor,2.63,2336.0,3.0,difficult,,,
+1ZLI,1ZLI_A:B,A:B,EI,1KWM_A,Carboxypeptidase B,2JTO_A(6),Tick carboxypeptidase inhibitor,2.53,2084.0,4.0,difficult,,,
+2IDO,2IDO_A:B,A:B,ES,1J54_A,DNA polymerase III ε exonuclease domain,1SE7_A(1),HOT protein (P1 phage),2.79,1953.0,4.0,difficult,,,
+2O3B,2O3B_A:B,A:B,EI,1ZM8_A,NucA nuclease,1J57_A,NuiA nuclease inhibitor,3.13,1675.0,4.0,difficult,,,
+2OT3,2OT3_B:A,B:A,ER,1YZU_A,Rab21 GTPase,1TXU_A,Rabex-5 VPS9 domain,2.79,2306.0,3.0,difficult,,,
+3FN1,3FN1_B:A ,B:A ,ER,2EDI_A(5),UQ_con domain from NEDD8-conjugating enzyme UBE2F,2LQ7_A,NEDD8-activaating enzyme E1 catalytic subunit,3.65,1897.0,5.0,difficult,,,
+3H11,3H11_BC:A ,BC:A ,ER,4JJ7_AB,Caspase-8,3H13_A,c-FLIPL protease-like domain,3.79,3169.0,5.0,difficult,,,
+4GAM,4GAM_AFBGCH:D ,AFBGCH:D ,ER,1XVB_ABCDEF,Methane monooxygenase hydroxylase,1CKV_A(9),Methane monooxygenase regulatory protein B,5.79,6671.0,5.0,difficult,,,
+1ATN,1ATN_A:D,A:D,OX,1IJJ_B,Actin,3DNI_,Dnase I,3.28,1774.0,2.0,difficult,-12.1,,Kastritis81
+1BKD,1BKD_R:S,R:S,OG,1CTQ_A,Ras GTPase,2II0_A,Son of sevenless,2.86,3163.0,3.0,difficult,,,
+1DE4,1DE4_AB:CF,AB:CF,OX,1A6Z_AB,β2-microglobulin,1CX8_AB,Transferrin receptor ectodom.,2.59,2066.0,2.0,difficult,-9.8,,Kastritis81
+1E4K,1E4K_AB:C,AB:C,OR,3AVE_AB,FC fragment of human IgG 1,1FNL_A,Human FCGR III,2.6,1634.0,3.0,difficult,-7.9,,Kastritis81
+1EER,1EER_A:BC,A:BC,OR,1BUY_A,Erythropoietin,1ERN_AB,EPO receptor,2.44,3347.0,2.0,difficult,-15.6,,Kastritis81
+1FAK,1FAK_HL:T,HL:T,OR,1QFK_HL,Coagulation factor VIIa,1TFH_B,Soluble tissue factor,6.18,3363.0,2.0,difficult,,,
+1H1V,1H1V_A:G,A:G,OX,1IJJ_B,Actin,1D0N_B,Gelsolin,6.62,2071.0,2.0,difficult,,,
+1IBR,1IBR_A:B,A:B,OG,1QG4_A,Ran GTPase,1F59_A,Importin beta,2.54,2270.0,2.0,difficult,,,
+1IRA,1IRA_Y:X,Y:X,OR,1G0Y_R,Interleukin-1 receptor,1ILR_1,Interleukin-1 receptor antagonist protein,8.38,3367.0,3.0,difficult,,,
+1R8S,1R8S_A:E,A:E,OG,1HUR_A,Arf1 GTPase,1R8M_E,Sec 7 domain,3.73,2986.0,3.0,difficult,,,
+1RKE,1RKE_A:B ,A:B ,OX,1SYQ_A,Vinculin head,3MYI_A,Vinculin tail,4.25,2614.0,5.0,difficult,,,
+1Y64,1Y64_A:B,A:B,OX,2FXU_A,Actin,1UX5_A,BNI1 protein,4.69,2745.0,3.0,difficult,,,
+2C0L,2C0L_A:B,A:B,OX,1FCH_A,PTS1 and TRP region of PEX5,1C44_A,SCP2,2.62,2013.0,3.0,difficult,-9.8,,Kastritis81
+2I9B,2I9B_E:A,E:A,OR,1YWH_A,Urokinase plasminogen activator surface receptor,2I9A_A,Urokinase-type plasminogen activator,3.79,2371.0,4.0,difficult,,,
+2J7P,2J7P_A:D,A:D,OX,1NG1_A,SRP GTPase Ffh,2IYL_D,Cell division protein FtsY,2.67,3008.0,4.0,difficult,,,
+3AAD,3AAD_A:B ,A:B ,OX,1EQF_A,Double bromodomain,1TEY_A(4),Histone chaperone ASF1,4.37,1654.0,5.0,difficult,,,
+3F1P,3F1P_A:B ,A:B ,OX,1P97_A(9),HIF2 alpha C-terminal PAS domain,1X0O_A(5),ARNT C-terminal PAS domain,2.52,1919.0,5.0,difficult,,,
+3L89,3L89_ABC:M ,ABC:M ,OR,3L88_ABC,Ad21 fiber knob,1CKL_A,CD46 SCR1 and SCR2 domains,2.51,2167.0,5.0,difficult,,,
