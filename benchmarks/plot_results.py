@@ -245,9 +245,14 @@ def plot_figure(
             xs = np.asarray([r.get("cpu_sasa_sum") for r in paired], dtype=float)
             ys = np.asarray([r.get(f"{name}_sasa_sum") for r in paired], dtype=float)
             r_value = _pearson(xs, ys)
+            mask = np.isfinite(xs) & np.isfinite(ys)
+            mae = float(np.mean(np.abs(xs[mask] - ys[mask]))) if mask.any() else None
             label = _display_name(name)
             if r_value is not None:
-                label += f"  (r={r_value:.4f})"
+                label += f"  (r={r_value:.4f}"
+                if mae is not None:
+                    label += f", MAE={mae:,.0f} Å²"
+                label += ")"
             ax_sasa.scatter(
                 xs, ys, s=48, alpha=0.85,
                 color=_BACKEND_COLORS.get(name),

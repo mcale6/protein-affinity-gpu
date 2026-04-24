@@ -1,18 +1,19 @@
 # protein-affinity-gpu
 
-`protein-affinity-gpu` is a research-friendly Python package for protein-protein binding affinity prediction, solvent-accessible surface area (SASA) analysis, and reproducible CPU/JAX/tinygrad benchmarking.
+`protein-affinity-gpu` started as an entry for the
+[Adaptyv](https://www.adaptyvbio.com/) binder-design competition. I wanted
+to add a loss to AFDesign's hallucination loop —
+specifically **buried surface area (BSA)** — which required writing the
+Shrake–Rupley SASA algorithm in JAX, end-to-end differentiable. Once the
+BSA path worked, the same masking + contact logic scores PRODIGY's IC-NIS
+ΔG, so I wired that up too. (It took longer than expected)
 
-Three first-class backends — CPU (freesasa via PRODIGY), JAX (blocked
-and `lax.scan`-fused Shrake–Rupley), and tinygrad (per-shape `TinyJit`
-block kernel on METAL / CUDA / GPU; full fused kernel on CPU / CLANG).
-Stable differentiable helpers for AFDesign-style losses live in
-[`protein_affinity_gpu.sasa_soft`](src/protein_affinity_gpu/sasa_soft.py),
-[`protein_affinity_gpu.contacts_soft`](src/protein_affinity_gpu/contacts_soft.py),
-[`protein_affinity_gpu.scoring_soft`](src/protein_affinity_gpu/scoring_soft.py),
-and [`protein_affinity_gpu.af_design`](src/protein_affinity_gpu/af_design.py).
-Experimental JAX modes (single-pass, neighbor-cutoff) remain documented in
-[docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md). See
-[docs/AF_DESIGN.md](docs/AF_DESIGN.md) for the soft-vs-hard design notes.
+At inference the JAX and tinygrad paths reproduce the CPU reference
+(freesasa via PRODIGY) to within ≈ 0.05 kcal/mol on 1A2K and hit equal or
+better wall-clock once the JIT is warm (<1s per structure), tracked in the benchmark panels below.
+
+What's next is using the
+whole pipeline as a **filter on generated bindres designs**  (Still in development).
 
 ## Installation
 
@@ -159,13 +160,27 @@ go deeper on the kernel-level choices.
 
 
 ## Benchmark
+
 On the Kahraman 2013 T3 set (16 two-chain complexes, atom14-padded
 N ∈ [4.4k, 12.8k]) the tinygrad block kernel runs at ~0.69 s warm-mean
 vs ~0.44 s for CPU freesasa — within ~1.6× of CPU — with Pearson
 `r > 0.9998` against CPU on per-structure SASA totals and `r = 1.000`
-on ΔG, Kd, NIS and contact metrics. Per 1 000 padded atoms, M1 Max
-costs ~57 ms (CPU freesasa) and ~84 ms (tinygrad-single); on A100
-jax-scan clocks ~74 ms and tinygrad-single ~39 ms.
+on ΔG, Kd, NIS and contact metrics.
+
+To make CPU and GPU rows directly comparable, all four backends run
+**Shrake–Rupley with 100 sphere points** and the same NACCESS vdW radii
+from [`data/vdw.radii`](src/protein_affinity_gpu/data/vdw.radii); 100 is
+well below the 960 used in the original Shrake–Rupley reference but our
+tinygrad 100-vs-960 sanity check on 1A2K and 2CFH shows total SASA
+shifts by ≤ 0.55 % (per-atom MAE ≈ 0.5 Å², max |Δ| ≈ 4.7 Å²) and
+predicted ΔG by ≤ 0.11 kcal/mol — no meaningful degradation at 100 for
+the PRODIGY scoring function. Sphere points are laid out with a
+**golden-spiral (Fibonacci)** scheme in
+[`sasa.generate_sphere_points`](src/protein_affinity_gpu/sasa.py);
+a **Thomson-sphere** layout (electrostatic-equilibrium, exactly uniform)
+would matter more for integrations where each point's implicit weight
+feeds a quantity like *contact area* — not used here, flagged as the
+alternative if that ever becomes relevant.
 
 The comparison figure below is committed at
 [`docs/assets/comparison_figure.png`](docs/assets/comparison_figure.png).
@@ -178,19 +193,42 @@ gitignored `benchmarks/output/combined/` and is copied into
 
 ### What was compared
 
-Six SASA backends over the 16-complex Kahraman 2013 T3 manifest
+Eight backend×device combinations over the 16-complex Kahraman 2013 T3
+manifest
 ([`benchmarks/datasets/kahraman_2013_t3.tsv`](benchmarks/datasets/kahraman_2013_t3.tsv)),
-atom14-padded N ∈ [4.4k, 12.8k] atoms:
+atom14-padded N ∈ [4.4k, 12.8k] atoms. `Warm` is per-structure warm-mean,
+`atoms/s` is `Σ N / Σ t`, `α` is the log–log slope of `t` vs `N`
+(`t ∝ Nᵅ`), `Cold` is first-call compile + run per structure:
 
-| Backend | Device | Kernel |
-|---------|--------|--------|
-| `cpu` | M1 Max CPU | freesasa via PRODIGY |
-| `tinygrad-block` | M1 Max Metal | per-shape `TinyJit` blocked Shrake–Rupley |
-| `tinygrad-single` | A100-80GB | fully fused `[N, M, N]` kernel |
-| `tinygrad-batch` | A100-80GB | blocked kernel with `block = min(768, N)` |
-| `jax-block` | A100-80GB | blocked Shrake–Rupley |
-| `jax-scan` | A100-80GB | `lax.scan`-fused variant |
-| `jax-single` | A100-80GB | fully fused single-pass kernel |
+| Backend | Device | Kernel | Warm | atoms/s | α | Cold |
+|---------|--------|--------|-----:|--------:|--:|-----:|
+| `cpu` | M1 Max CPU | freesasa Shrake–Rupley, 100 points, real atoms | 0.44 s | ~17 k | ~0.6 | 0.4 s |
+| `tinygrad-single` | M1 Max Metal | fully fused `[N, M, N]` | 0.64 s | ~12 k | ~1.6 | 1.0 s |
+| `tinygrad-batch` (block) | M1 Max Metal | per-shape `TinyJit`, `block = min(768, N)` | 0.70 s | ~11 k | ~1.8 | 0.9 s |
+| `jax-single` † | A100-80GB | fully fused single-pass `[N, M, N]` | 0.20 s | ~34 k | ~0.7 | 7.0 s |
+| `jax-batch` (block) | A100-80GB | blocked SR, Python loop over `@jit`ed kernel | 0.23 s | ~34 k | ~0.6 | 2.7 s |
+| `jax-scan` | A100-80GB | `lax.scan`-fused block loop | 0.56 s | ~13 k | ~0.2 | 1.0 s |
+| `tinygrad-single` | A100-80GB | fully fused `[N, M, N]` | 0.29 s | ~26 k | ~1.0 | 2.0 s |
+| `tinygrad-batch` (block) | A100-80GB | `TinyJit` per `(B, N, M)` | 0.64 s | ~12 k | ~2.0 | 2.0 s |
+
+† `jax-single` excludes 1HE8 (N=12810) and 1Y64 (N=10738) — both OOM on
+80 GB at the ~66 / ~46 GB fused scratch.
+
+- **`jax-scan` cold is ~3× faster than `jax-batch`** because the block
+  loop is hoisted into one `lax.scan` XLA primitive — one small while-body
+  to compile, no tail-block re-compile. `jax-single`'s 7 s cold is the
+  same kernel but one giant HLO per distinct `N`.
+- **Scaling patterns**: A100 JAX is overhead-bound (`α ≈ 0.2–0.7`);
+  `tinygrad-batch` is near-quadratic (per-block Python dispatch doesn't
+  amortize); CPU is sub-linear (freesasa's C Shrake–Rupley uses an
+  internal neighbour/cell list so per-atom work is ~constant).
+- **CPU vs GPU parity**: all backends run Shrake–Rupley at 100 sphere
+  points (see `cpu.py:35-36`); the CPU row differs only in working on the
+  real, un-padded atom set (~1.7× fewer atoms than the atom14-padded GPU
+  tensors) and in freesasa's C neighbour-list implementation vs the GPU's
+  dense `[N, M, N]` probe-scatter. Same algorithm, same integration
+  density — agreement is `r = 0.9999` on SASA and `r = 1.000` on
+  ΔG/Kd/NIS.
 
 ### Commands
 
@@ -253,7 +291,7 @@ uv sync --extra modal
 modal setup
 ```
 ---
-## SASA Algorithm — Shrake–Rupley vs Lee–Richards
+### SASA Algorithm — Shrake–Rupley vs Lee–Richards
 
 All three backends implement the **Shrake–Rupley** rolling-probe algorithm
 (1973). For each atom, a fixed set of points is distributed on the
@@ -283,7 +321,7 @@ downstream PRODIGY metrics (ΔG, Kd, NIS, contact classes) match to
 `r = 1.000`, so the integration error is well below the noise floor of
 the scoring function.
 
-## Van der Waals Radii
+### Van der Waals Radii
 
 SASA computation uses a NACCESS-style van der Waals radii library
 shipped at [`src/protein_affinity_gpu/data/vdw.radii`](src/protein_affinity_gpu/data/vdw.radii)
@@ -293,6 +331,9 @@ lines — that can be swapped for any NACCESS-formatted library (e.g. a
 Bondi set, or a user-patched radius for a non-standard residue) by
 editing the file in place before installing, or by overriding
 `residue_library.default_library` at import time.
+
+
+---
 
 ## AFDesign Integration — soft-scan SASA
 
@@ -356,7 +397,7 @@ NIS / SASA analysis and the `aux["seq"]["soft"]` vs `"pseudo"` choice.
   <https://doi.org/10.1016/j.jmb.2014.04.017>. Introduces the
   non-interacting-surface (NIS) term — polar and charged residues on the
   NIS contribute to `Kd` and `koff` via long-range electrostatics and
-  water–surface interactions — that the 2015 eLife model combines with
+  water–surface interactions — that the model combines with
   inter-chain contacts. The `p_nis_polar` / `p_nis_charged` /
   `p_nis_aliphatic` features in `protein_affinity_gpu.scoring` come from
   this surface model.

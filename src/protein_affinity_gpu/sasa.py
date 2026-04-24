@@ -331,35 +331,39 @@ def calculate_sasa_batch_scan(
 
 @jit
 def _calculate_sasa_jax_impl(
-    coords: jnp.ndarray,
-    vdw_radii: jnp.ndarray,
-    mask: jnp.ndarray,
-    sphere_points: jnp.ndarray,
+    coords: jnp.ndarray,          # [N, 3]
+    vdw_radii: jnp.ndarray,       # [N]
+    mask: jnp.ndarray,            # [N]
+    sphere_points: jnp.ndarray,   # [M, 3]
     probe_radius: float = 1.4,
 ) -> jnp.ndarray:
     """Fully vectorized Shrake–Rupley SASA — single ``@jit`` pass, no block loop."""
     masked_coords, radii_with_probe, coords_norm2, radii_probe_sq = _precompute_sasa_inputs(
         coords, vdw_radii, mask, probe_radius
-    )
+    )  # [N, 3], [N], [N], [N]
     n_atoms = coords.shape[0]
     n_points = sphere_points.shape[0]
 
-    dot_nn = masked_coords @ masked_coords.T
-    dist2_inter = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn
-    radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2
-    not_eye = ~jnp.eye(n_atoms, dtype=jnp.bool_)
-    interaction_matrix = (dist2_inter <= radsum2) & not_eye
+    dot_nn = masked_coords @ masked_coords.T                                  # [N, N]
+    dist2_inter = coords_norm2[:, None] + coords_norm2[None, :] - 2.0 * dot_nn  # [N, N]
+    radsum2 = (radii_with_probe[:, None] + radii_with_probe[None, :]) ** 2    # [N, N]
+    not_eye = ~jnp.eye(n_atoms, dtype=jnp.bool_)                              # [N, N]
+    interaction_matrix = (dist2_inter <= radsum2) & not_eye                    # [N, N]
 
-    scaled = sphere_points[None, :, :] * radii_with_probe[:, None, None] + masked_coords[:, None, :]
-    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)
-    dot = jnp.einsum("nms,ks->nmk", scaled, masked_coords)
-    dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot
+    scaled = (
+        sphere_points[None, :, :] * radii_with_probe[:, None, None]
+        + masked_coords[:, None, :]
+    )  # [N, M, 3]
+    scaled_norm2 = jnp.sum(scaled ** 2, axis=-1)                              # [N, M]
+    # Batched dot products over xyz: dot[n, m, k] = <scaled[n, m, :], masked_coords[k, :]>.
+    dot = jnp.einsum("nms,ks->nmk", scaled, masked_coords)                    # [N, M, N]
+    dist2 = scaled_norm2[:, :, None] + coords_norm2[None, None, :] - 2.0 * dot  # [N, M, N]
 
-    is_buried = (dist2 <= radii_probe_sq[None, None, :]) & interaction_matrix[:, None, :]
-    buried = jnp.any(is_buried, axis=-1).sum(axis=-1)
-    n_accessible = n_points - buried
-    areas = 4.0 * jnp.pi * radii_probe_sq
-    return areas * (n_accessible / n_points)
+    is_buried = (dist2 <= radii_probe_sq[None, None, :]) & interaction_matrix[:, None, :]  # [N, M, N]
+    buried = jnp.any(is_buried, axis=-1).sum(axis=-1)                         # [N]
+    n_accessible = n_points - buried                                          # [N]
+    areas = 4.0 * jnp.pi * radii_probe_sq                                     # [N]
+    return areas * (n_accessible / n_points)                                    # [N]
 
 
 def _log_single_pass_scratch(n_atoms: int, n_points: int, soft: bool) -> None:
