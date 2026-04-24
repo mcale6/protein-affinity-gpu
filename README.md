@@ -10,7 +10,10 @@ BSA path worked, the same masking + contact logic scores PRODIGY's IC-NIS
 
 At inference the JAX and tinygrad paths reproduce the CPU reference
 (freesasa via PRODIGY) to within ≈ 0.05 kcal/mol on 1A2K and hit equal or
-better wall-clock once the JIT is warm (<1s per structure), tracked in the benchmark panels below.
+better wall-clock once the JIT is warm (<1s per structure), tracked in the
+benchmark panels below. The tinygrad backend also runs on Apple M-series
+chips via Metal (`TINYGRAD_DEVICE=METAL`) — no CUDA / Modal needed for
+local iteration.
 
 What's next is using the
 whole pipeline as a **filter on generated bindres designs**  (Still in development).
