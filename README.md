@@ -59,9 +59,7 @@ Each run prints the same summary `str(result)` produces — ΔG, Kd,
 contact breakdown, NIS breakdown. `--output-json` persists the full
 per-atom result; `--verbose` streams phase timings to stderr.
 
-Benchmarking is deliberately kept out of the installed CLI — the harness
-scripts live in [`benchmarks/`](benchmarks) and are invoked directly.
-See [Modal Benchmark](#modal-benchmark) below.
+
 
 ## Python API
 
@@ -141,14 +139,17 @@ All three backends share one pipeline parametrised by a
 materialisation, kernel dispatch, and the block-size heuristic. The
 `mode` kwarg picks the SASA kernel family — `block` (bounded scratch,
 per-shape JIT cache; default), `scan` (JAX-only, `lax.scan`-fused),
-`single` (fully fused `[N, M, N]`; fastest when it fits), and `neighbor`
-(tinygrad-only, `topk`-pruned; for memory-constrained GPUs).
+`single` (fully fused `[N, M, N]`; fastest when it fits). (and `neighbor`
+(tinygrad-only, `topk`-pruned; for memory-constrained GPUs) - not working yet)
 
-On the Kahraman 2013 T3 set (16 two-chain complexes, padded
-N ∈ [2.5k, 12.8k]) the tinygrad block kernel runs at ~0.69 s warm-mean
-vs ~0.49 s for CPU freesasa — within 1.5× of CPU — with Pearson
-`r > 0.9998` against CPU on per-structure SASA totals and `r = 1.000`
-on ΔG, Kd, NIS and contact metrics.
+Atom layout note: structures enter the SASA kernel in **atom14**, the
+AlphaFold2-style compact layout where each residue is packed into 14
+slots (Trp's max) instead of atom37's 37 universal-index slots. Residue
+meaning varies by column in atom14 but the tensor is ~4.4× smaller, and
+padding slots carry zero radii so the kernel sees them as inert — a
+`restype_atom14_to_atom37` gather scatters per-atom SASA back to atom37
+for reporting (see [`utils/atom14.py`](src/protein_affinity_gpu/utils/atom14.py)).
+
 
 See [docs/INDEX.md](docs/INDEX.md) for the full adapter / per-device
 behaviour tables, block-size heuristics, kernel scratch shapes, and the
@@ -156,6 +157,102 @@ tinygrad `mode` trade-offs; [docs/EXPERIMENTAL.md](docs/EXPERIMENTAL.md)
 and [docs/TINYGRAD_SASA_OPTIMIZATION.md](docs/TINYGRAD_SASA_OPTIMIZATION.md)
 go deeper on the kernel-level choices.
 
+
+## Benchmark
+On the Kahraman 2013 T3 set (16 two-chain complexes, atom14-padded
+N ∈ [4.4k, 12.8k]) the tinygrad block kernel runs at ~0.69 s warm-mean
+vs ~0.44 s for CPU freesasa — within ~1.6× of CPU — with Pearson
+`r > 0.9998` against CPU on per-structure SASA totals and `r = 1.000`
+on ΔG, Kd, NIS and contact metrics. Per 1 000 padded atoms, M1 Max
+costs ~57 ms (CPU freesasa) and ~84 ms (tinygrad-single); on A100
+jax-scan clocks ~74 ms and tinygrad-single ~39 ms.
+
+The comparison figure below is committed at
+[`docs/assets/comparison_figure.png`](docs/assets/comparison_figure.png).
+It is the merged output of one local Apple M1 Max run and one Modal A100-80GB
+run, plotted with `benchmarks/plot_results.py` (which writes into the
+gitignored `benchmarks/output/combined/` and is copied into
+`docs/assets/` for the README).
+
+![Backend comparison on Kahraman 2013 T3](docs/assets/comparison_figure.png)
+
+### What was compared
+
+Six SASA backends over the 16-complex Kahraman 2013 T3 manifest
+([`benchmarks/datasets/kahraman_2013_t3.tsv`](benchmarks/datasets/kahraman_2013_t3.tsv)),
+atom14-padded N ∈ [4.4k, 12.8k] atoms:
+
+| Backend | Device | Kernel |
+|---------|--------|--------|
+| `cpu` | M1 Max CPU | freesasa via PRODIGY |
+| `tinygrad-block` | M1 Max Metal | per-shape `TinyJit` blocked Shrake–Rupley |
+| `tinygrad-single` | A100-80GB | fully fused `[N, M, N]` kernel |
+| `tinygrad-batch` | A100-80GB | blocked kernel with `block = min(768, N)` |
+| `jax-block` | A100-80GB | blocked Shrake–Rupley |
+| `jax-scan` | A100-80GB | `lax.scan`-fused variant |
+| `jax-single` | A100-80GB | fully fused single-pass kernel |
+
+### Commands
+
+```bash
+# Local M1 Max: cpu + tinygrad-batch + tinygrad-single
+.venv/bin/python benchmarks/benchmark.py \
+    --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
+    --structures-dir benchmarks/downloads/kahraman_2013_t3 \
+    --output-dir benchmarks/output/local \
+    --targets cpu tinygrad-batch tinygrad-single
+
+# Remote A100-80GB: jax-single,batch,scan + tinygrad-single,batch
+modal run benchmarks/modal_benchmark.py \
+    --repeats 2 --run-name kahraman-a100 \
+    --targets jax-single,jax-batch,jax-scan,tinygrad-single,tinygrad-batch \
+    --local-output-dir benchmarks/output/gpu
+
+# Merge the two CSVs into one figure (earlier CSVs win on shared columns —
+# passing the GPU file first keeps A100 numbers and fills only CPU-only
+# columns from the local run).
+.venv/bin/python benchmarks/plot_results.py \
+    benchmarks/output/gpu/results.csv \
+    benchmarks/output/local/results.csv \
+    --output-dir benchmarks/output/combined \
+    --figure-name comparison_figure.png
+```
+
+### Observed differences and why
+
+- **All 6 GPU backends agree with CPU to Pearson `r = 0.9999`** on
+  per-structure SASA totals once TF32 is disabled. Without the fix, JAX
+  on A100 drifts per-structure because the Shrake–Rupley kernels use the
+  `dist² = ‖a‖² + ‖b‖² − 2·⟨a,b⟩` identity — a classic catastrophic
+  cancellation trap. TF32's ~10-bit mantissa in `@`/`einsum` flips
+  buried/not-buried sphere-point votes near the threshold. We set
+  `JAX_DEFAULT_MATMUL_PRECISION=highest` in the Modal image
+  ([`benchmarks/modal_benchmark.py`](benchmarks/modal_benchmark.py))
+  and as a module-level `jax.config.update(...)` in
+  [`src/protein_affinity_gpu/af_design.py`](src/protein_affinity_gpu/af_design.py)
+  so the design loss inherits it locally too. Tinygrad-Metal has no TF32
+  path and was already correct.
+
+- **JAX compile caches accumulate across distinct shapes** and pin device
+  scratch, so a 16-structure sweep can OOM on 80 GB even when each
+  individual structure fits. The sweep loop calls
+  `clear_accelerator_caches()` (in
+  [`benchmarks/sasa/sasa_benchmark.py`](benchmarks/sasa/sasa_benchmark.py)),
+  which runs `jax.clear_caches()` + tinygrad `TinyJit` cache drops
+  + `gc.collect()` between structures.
+
+- **Two largest structures still OOM `jax-single`** (N = 12810 and
+  N = 10738 → fused scratch of 66 GB / 46 GB). That is a physics limit of
+  the fused kernel, not a cache issue — use `jax-block` or `jax-scan` for
+  those.
+
+### Setup
+
+```bash
+uv sync --extra modal
+modal setup
+```
+---
 ## SASA Algorithm — Shrake–Rupley vs Lee–Richards
 
 All three backends implement the **Shrake–Rupley** rolling-probe algorithm
@@ -243,103 +340,26 @@ NIS / SASA analysis and the `aux["seq"]["soft"]` vs `"pseudo"` choice.
 > `best_sequences` from `modal_afdesign_ba_val.py` as optimiser
 > snapshots, not candidates.
 
-## Modal Benchmark
-
-The comparison figure below is committed at
-[`docs/assets/comparison_figure.png`](docs/assets/comparison_figure.png).
-It is the merged output of one local Apple M1 Max run and one Modal A100-80GB
-run, plotted with `benchmarks/plot_results.py` (which writes into the
-gitignored `benchmarks/output/combined/` and is copied into
-`docs/assets/` for the README).
-
-![Backend comparison on Kahraman 2013 T3](docs/assets/comparison_figure.png)
-
-### What was compared
-
-Six SASA backends over the 16-complex Kahraman 2013 T3 manifest
-([`benchmarks/datasets/kahraman_2013_t3.tsv`](benchmarks/datasets/kahraman_2013_t3.tsv)),
-padded N ∈ [2.5k, 12.8k] atom14-atoms:
-
-| Backend | Device | Kernel |
-|---------|--------|--------|
-| `cpu` | M1 Max CPU | freesasa via PRODIGY |
-| `tinygrad-block` | M1 Max Metal | per-shape `TinyJit` blocked Shrake–Rupley |
-| `tinygrad-single` | A100-80GB | fully fused `[N, M, N]` kernel |
-| `tinygrad-batch` | A100-80GB | blocked kernel with `block = min(768, N)` |
-| `jax-block` | A100-80GB | blocked Shrake–Rupley |
-| `jax-scan` | A100-80GB | `lax.scan`-fused variant |
-| `jax-single` | A100-80GB | fully fused single-pass kernel |
-
-### Commands
-
-```bash
-# Local M1 Max: cpu + tinygrad-batch + tinygrad-single
-.venv/bin/python benchmarks/benchmark.py \
-    --manifest benchmarks/datasets/kahraman_2013_t3.tsv \
-    --structures-dir benchmarks/downloads/kahraman_2013_t3 \
-    --output-dir benchmarks/output/local \
-    --targets cpu tinygrad-batch tinygrad-single
-
-# Remote A100-80GB: jax-single,batch,scan + tinygrad-single,batch
-modal run benchmarks/modal_benchmark.py \
-    --repeats 2 --run-name kahraman-a100 \
-    --targets jax-single,jax-batch,jax-scan,tinygrad-single,tinygrad-batch \
-    --local-output-dir benchmarks/output/gpu
-
-# Merge the two CSVs into one figure (earlier CSVs win on shared columns —
-# passing the GPU file first keeps A100 numbers and fills only CPU-only
-# columns from the local run).
-.venv/bin/python benchmarks/plot_results.py \
-    benchmarks/output/gpu/results.csv \
-    benchmarks/output/local/results.csv \
-    --output-dir benchmarks/output/combined \
-    --figure-name comparison_figure.png
-```
-
-### Observed differences and why
-
-- **All 6 GPU backends agree with CPU to Pearson `r = 0.9999`** on
-  per-structure SASA totals once TF32 is disabled. Without the fix, JAX
-  on A100 drifts per-structure because the Shrake–Rupley kernels use the
-  `dist² = ‖a‖² + ‖b‖² − 2·⟨a,b⟩` identity — a classic catastrophic
-  cancellation trap. TF32's ~10-bit mantissa in `@`/`einsum` flips
-  buried/not-buried sphere-point votes near the threshold. We set
-  `JAX_DEFAULT_MATMUL_PRECISION=highest` in the Modal image
-  ([`benchmarks/modal_benchmark.py`](benchmarks/modal_benchmark.py))
-  and as a module-level `jax.config.update(...)` in
-  [`src/protein_affinity_gpu/af_design.py`](src/protein_affinity_gpu/af_design.py)
-  so the design loss inherits it locally too. Tinygrad-Metal has no TF32
-  path and was already correct.
-
-- **JAX compile caches accumulate across distinct shapes** and pin device
-  scratch, so a 16-structure sweep can OOM on 80 GB even when each
-  individual structure fits. The sweep loop calls
-  `clear_accelerator_caches()` (in
-  [`benchmarks/sasa/sasa_benchmark.py`](benchmarks/sasa/sasa_benchmark.py)),
-  which runs `jax.clear_caches()` + tinygrad `TinyJit` cache drops
-  + `gc.collect()` between structures.
-
-- **Two largest structures still OOM `jax-single`** (N = 12810 and
-  N = 10738 → fused scratch of 66 GB / 46 GB). That is a physics limit of
-  the fused kernel, not a cache issue — use `jax-block` or `jax-scan` for
-  those.
-
-### Setup
-
-```bash
-uv sync --extra modal
-modal setup
-```
 
 ## References
 
-- **PRODIGY** — Xue, L.C., Rodrigues, J.P., Kastritis, P.L., Bonvin,
-  A.M.J.J., Vangone, A. *PRODIGY: a web server for predicting the binding
-  affinity of protein-protein complexes.* Bioinformatics 32(23), 3676–3678
-  (2016). <https://doi.org/10.1093/bioinformatics/btw514>. The IC-NIS
-  scoring model and the (aliphatic/charged/polar) × contact-class scheme
-  implemented in `protein_affinity_gpu.scoring` / `.contacts` follow this
-  paper.
+- **PRODIGY** — Vangone, A., Bonvin, A.M.J.J. *Contacts-based prediction
+  of binding affinity in protein–protein complexes.* eLife 4:e07454
+  (2015). <https://doi.org/10.7554/eLife.07454>. The IC-NIS scoring
+  model and the (aliphatic/charged/polar) × contact-class scheme
+  implemented in `protein_affinity_gpu.scoring` / `.contacts` follow
+  this paper.
+- **PRODIGY — NIS component** — Kastritis, P.L., Rodrigues, J.P.G.L.M.,
+  Folkers, G.E., Boelens, R., Bonvin, A.M.J.J. *Proteins feel more than
+  they see: fine-tuning of binding affinity by properties of the
+  non-interacting surface.* J. Mol. Biol. 426(14), 2632–2652 (2014).
+  <https://doi.org/10.1016/j.jmb.2014.04.017>. Introduces the
+  non-interacting-surface (NIS) term — polar and charged residues on the
+  NIS contribute to `Kd` and `koff` via long-range electrostatics and
+  water–surface interactions — that the 2015 eLife model combines with
+  inter-chain contacts. The `p_nis_polar` / `p_nis_charged` /
+  `p_nis_aliphatic` features in `protein_affinity_gpu.scoring` come from
+  this surface model.
 - **freesasa** — Mitternacht, S. *FreeSASA: An open source C library for
   solvent accessible surface area calculations.* F1000Research 5:189
   (2016). <https://doi.org/10.12688/f1000research.7931.1>. The CPU

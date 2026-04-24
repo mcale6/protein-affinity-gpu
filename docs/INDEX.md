@@ -53,6 +53,7 @@ Stable differentiable AFDesign helpers live in
 | Modal GPU benchmark harness | [benchmarks/modal_benchmark.py](../benchmarks/modal_benchmark.py) |
 | Benchmark plot merger | [benchmarks/plot_results.py](../benchmarks/plot_results.py) |
 | Shared benchmark helpers | [benchmarks/sasa/sasa_benchmark.py](../benchmarks/sasa/sasa_benchmark.py) |
+| ProteinBase benchmark plan | [docs/PROTEINBASE_BENCHMARK.md](PROTEINBASE_BENCHMARK.md) |
 | JAX block-size profiler | [benchmarks/sasa/profile_sasa.py](../benchmarks/sasa/profile_sasa.py) |
 | Test suite | [tests/](../tests) |
 | Release script | [update_pkg.sh](../update_pkg.sh) |

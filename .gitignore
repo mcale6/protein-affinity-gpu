@@ -42,3 +42,10 @@ Thumbs.db
 # Claude Code local state
 .claude/
 claudedocs/
+
+# Local-only: implementation scripts and phase-specific design docs
+# (see docs/AFFINITY_CALIBRATION_NOTES.md for the public summary)
+benchmarks/scripts/
+docs/PAE.md
+docs/BOLTZ_PIPELINE.md
+docs/PROTEINBASE_BENCHMARK.md
