@@ -25,8 +25,15 @@ Stable differentiable AFDesign helpers live in
 [`scoring_soft.py`](../src/protein_affinity_gpu/scoring_soft.py), and
 [`sasa_soft.py`](../src/protein_affinity_gpu/sasa_soft.py) — see
 [AF_DESIGN.md](AF_DESIGN.md). Experimental kernels and entry points
-(tinygrad, single-pass / neighbor-cutoff JAX) still live behind
-`protein_affinity_gpu.experimental` — see [EXPERIMENTAL.md](EXPERIMENTAL.md).
+(tinygrad, single-pass / neighbor-cutoff JAX, bucketed tinygrad) still live
+behind `protein_affinity_gpu.experimental` — see [EXPERIMENTAL.md](EXPERIMENTAL.md).
+
+PAE-gated residue contacts (structuremap-style, for scoring AlphaFold /
+Boltz-2 predicted complexes) live in
+[`contacts_pae.py`](../src/protein_affinity_gpu/contacts_pae.py) — a drop-in
+replacement for `calculate_residue_contacts` that takes an inter-chain PAE
+block. See [PAE.md](PAE.md) for the three-phase calibration plan and
+[BOLTZ_PIPELINE.md](BOLTZ_PIPELINE.md) for the Kastritis-81 Boltz-2 driver.
 
 ---
 
@@ -44,6 +51,7 @@ Stable differentiable AFDesign helpers live in
 | CPU predictor | [src/protein_affinity_gpu/cpu.py](../src/protein_affinity_gpu/cpu.py) |
 | Default SASA kernels | [src/protein_affinity_gpu/sasa.py](../src/protein_affinity_gpu/sasa.py) |
 | Stable soft kernels | [src/protein_affinity_gpu/sasa_soft.py](../src/protein_affinity_gpu/sasa_soft.py) |
+| PAE-gated contacts | [src/protein_affinity_gpu/contacts_pae.py](../src/protein_affinity_gpu/contacts_pae.py) · [docs](PAE.md) |
 | Backend adapters | [src/protein_affinity_gpu/backends/](../src/protein_affinity_gpu/backends/) |
 | Experimental surface | [src/protein_affinity_gpu/experimental.py](../src/protein_affinity_gpu/experimental.py) · [docs](EXPERIMENTAL.md) |
 | Logging helpers | [src/protein_affinity_gpu/utils/logging_utils.py](../src/protein_affinity_gpu/utils/logging_utils.py) |
@@ -53,8 +61,15 @@ Stable differentiable AFDesign helpers live in
 | Modal GPU benchmark harness | [benchmarks/modal_benchmark.py](../benchmarks/modal_benchmark.py) |
 | Benchmark plot merger | [benchmarks/plot_results.py](../benchmarks/plot_results.py) |
 | Shared benchmark helpers | [benchmarks/sasa/sasa_benchmark.py](../benchmarks/sasa/sasa_benchmark.py) |
-| ProteinBase benchmark plan | [docs/PROTEINBASE_BENCHMARK.md](PROTEINBASE_BENCHMARK.md) |
 | JAX block-size profiler | [benchmarks/sasa/profile_sasa.py](../benchmarks/sasa/profile_sasa.py) |
+| Kastritis-81 Boltz-2 pipeline | [benchmarks/scripts/boltz_pipeline/](../benchmarks/scripts/boltz_pipeline/) · [docs](BOLTZ_PIPELINE.md) |
+| PAE calibration scripts | [benchmarks/scripts/pae_calibration/](../benchmarks/scripts/pae_calibration/) · [docs](PAE.md) |
+| ProteinBase pipeline | [benchmarks/scripts/proteinbase_pipeline/](../benchmarks/scripts/proteinbase_pipeline/) · [docs](PROTEINBASE_BENCHMARK.md) |
+| Benchmark dataset — Kastritis 81 | [benchmarks/datasets/kastritis_81/](../benchmarks/datasets/kastritis_81/) |
+| Benchmark dataset — Vreven BM5.5 (106 ΔG) | [benchmarks/datasets/vreven_bm55/](../benchmarks/datasets/vreven_bm55/) |
+| Benchmark dataset — ProteinBase | [benchmarks/datasets/proteinbase/](../benchmarks/datasets/proteinbase/) |
+| US-align binary (TM-score) | [benchmarks/tools/USalign](../benchmarks/tools/USalign) |
+| Tinygrad SASA perf notes | [docs/TINYGRAD_SASA_OPTIMIZATION.md](TINYGRAD_SASA_OPTIMIZATION.md) |
 | Test suite | [tests/](../tests) |
 | Release script | [update_pkg.sh](../update_pkg.sh) |
 
@@ -75,6 +90,19 @@ protein-affinity-gpu/
 │   ├── sasa/
 │   │   ├── sasa_benchmark.py     # Shared helpers (BACKENDS, run_benchmark, manifest/download)
 │   │   └── profile_sasa.py       # Single-complex JAX block-size sweep (estimator vs observed)
+│   ├── datasets/                 # Committed manifests / metadata per benchmark family
+│   │   ├── kahraman_2013_t3.tsv
+│   │   ├── kastritis_81/         # PRODIGY calibration set (81 complexes, experimental ΔG)
+│   │   ├── vreven_bm55/          # Docking BM5.5 (257 rows; 106 ΔG-annotated subset)
+│   │   └── proteinbase/          # ProteinBase snapshot (5,361 design-target rows)
+│   ├── downloads/                # Git-ignored raw structures / CSVs fetched per pipeline
+│   ├── scripts/                  # Multi-step research pipelines (one dir per family)
+│   │   ├── boltz_pipeline/       # Kastritis-81 / Vreven Boltz-2 runner + MM-align + PRODIGY-on-Boltz
+│   │   ├── pae_calibration/      # PAE-aware PRODIGY refits (union, stratified, ElasticNet, XGBoost…)
+│   │   └── proteinbase_pipeline/ # ProteinBase: plot Kd↔ipTM, download CIFs, score PRODIGY + CAD-score-LT
+│   ├── tools/
+│   │   └── USalign              # Single-file C++ TM-score binary (rebuild via g++ -O3 USalign.cpp)
+│   ├── output/                   # Benchmark outputs (mostly git-ignored — see §4.2)
 │   └── fixtures/1A2K.pdb         # Canonical two-chain complex used by tests
 ├── af_design/
 │   ├── modal_afdesign_ba_val.py       # Modal entrypoint: AfDesign binder hallucination + ba_val loss
@@ -92,6 +120,7 @@ protein-affinity-gpu/
 │   ├── sasa_experimental.py   # Experimental SASA kernels (neighbor-cutoff, bucketed) + soft re-exports
 │   ├── contacts.py            # Residue contacts + interaction class counts
 │   ├── contacts_soft.py       # Stable differentiable residue-contact probabilities
+│   ├── contacts_pae.py        # PAE-gated residue contacts (structuremap-style, for AF/Boltz complexes)
 │   ├── scoring.py             # NISCoefficients + backend-agnostic scoring primitives
 │   ├── scoring_soft.py        # Stable differentiable NIS thresholding
 │   ├── af_design.py           # Stable AfDesign / ColabDesign loss helpers
@@ -102,8 +131,7 @@ protein-affinity-gpu/
 │   │   ├── _jax_experimental.py   # JAXExperimentalAdapter (+ soft / single / neighbor)
 │   │   └── _tinygrad.py           # TinygradAdapter (experimental)
 │   ├── cli/
-│   │   ├── predict.py         # `protein-affinity-predict`
-│   │   └── benchmark.py       # `protein-affinity-benchmark`
+│   │   └── predict.py         # `protein-affinity-predict` (sole installed console script)
 │   ├── data/                  # naccess.config, vdw.radii, thomson*.xyz
 │   └── utils/
 │       ├── _array.py                  # Array TypeAlias, NumpyEncoder, concat/stack/exp shims
@@ -259,6 +287,25 @@ entry points are documented in [EXPERIMENTAL.md §3](EXPERIMENTAL.md).
 - `calculate_residue_contacts_tinygrad(…)` — matmul-reshape variant that sidesteps Metal's unified-memory pressure on the ``[N_t, N_b, 37, 37, 3]`` intermediate.
 - `analyze_contacts(contacts, target_seq, binder_seq, class_matrix)` — backend-agnostic broadcast outer product, returns the 6-tuple `[AA, CC, PP, AC, AP, CP]`.
 
+### 3.5a PAE-gated contacts — `contacts_pae.py`
+
+Drop-in replacement for `calculate_residue_contacts` that folds an AlphaFold /
+Boltz-2 inter-chain PAE block into the contact gate. Downstream
+(`analyze_contacts`, NIS, IC-NIS linear model) is unchanged — **NIS is
+intentionally not PAE-gated**.
+
+| Symbol | Purpose |
+|--------|---------|
+| `load_pae_json(path)` | Parse AFDB v1–v2 (`distance`), AFDB v3+ / AF2-Multimer (`predicted_aligned_error`), or AF3 (`pae`) schemas into a square `[L, L]` fp32 array. |
+| `slice_pae_inter(pae_full, target_len, binder_len, symmetrize=True)` | Extract the `[N_t, N_b]` inter-chain block; symmetrizes `0.5 * (upper + lower.T)` by default. |
+| `calculate_residue_contacts_pae(..., pae_inter, pae_cutoff=10.0, gate_mode="confidence"\|"pessimistic")` | Mirrors the JAX 5-D diff kernel in `contacts.py` with two extra gates. `"confidence"` (default): independent `(dist ≤ cutoff) ∧ (PAE ≤ τ)`. `"pessimistic"`: structuremap-literal additive `(dist + PAE ≤ cutoff)`. |
+
+See [PAE.md](PAE.md) for the three-phase plan (Phase 1 ✓ inference, Phase 2
+Kastritis/Vreven calibration, Phase 3 AFDesign design-loop integration) and
+[BOLTZ_PIPELINE.md](BOLTZ_PIPELINE.md) for the Boltz-2 driver that feeds
+Phase 2. Calibration scripts live in
+[`benchmarks/scripts/pae_calibration/`](../benchmarks/scripts/pae_calibration/).
+
 ### 3.6 Scoring — `scoring.py`
 
 PRODIGY IC-NIS coefficients live in the `NISCoefficients` frozen dataclass
@@ -310,7 +357,10 @@ body runs on numpy, jax, and tinygrad:
 
 ## 4. Command-line interface
 
-Both CLIs are registered as console scripts in [pyproject.toml](../pyproject.toml).
+Only `protein-affinity-predict` is registered as a console script in
+[pyproject.toml](../pyproject.toml). Benchmarking and the research pipelines
+(Boltz-2, PAE calibration, ProteinBase) are intentionally out of the
+installed CLI — invoke them as scripts under `benchmarks/`.
 
 ### 4.1 `protein-affinity-predict`
 
@@ -394,6 +444,42 @@ sweep these pin ~1–4 GB of Metal scratch each. The shared harness calls
 `sasa_benchmark.clear_tinygrad_caches()` between structures so Metal
 does not return `Internal Error (0000000e)` under accumulated pressure.
 
+See [TINYGRAD_SASA_OPTIMIZATION.md](TINYGRAD_SASA_OPTIMIZATION.md) for the
+per-shape `TinyJit` caching trick that drove the ~53× Metal speed-up on 1A2K
+and notes on a parity pitfall (don't fuse the final scaling into the JIT
+kernel).
+
+### 4.3 Research pipelines (`benchmarks/scripts/`)
+
+Pipelines are ordered scripts — numbered prefixes signal run order. Inputs
+are committed under `benchmarks/datasets/`, raw downloads go to git-ignored
+`benchmarks/downloads/`, and artifacts to `benchmarks/output/<family>/`.
+
+| Pipeline | Purpose | Driver docs |
+|----------|---------|-------------|
+| [`boltz_pipeline/`](../benchmarks/scripts/boltz_pipeline/) | Predict Kastritis-81 / Vreven BM5.5 complexes with Boltz-2 on Modal (A100-80GB, CUDA 13 base). Runs 01_prep → 03_build_boltz_yaml → 04_modal_boltz_predict → 05_mmalign_tm (US-align) → 05b_prodigy_on_boltz → 06_plot_boltz_eval. | [BOLTZ_PIPELINE.md](BOLTZ_PIPELINE.md) |
+| [`pae_calibration/`](../benchmarks/scripts/pae_calibration/) | PAE-aware PRODIGY refits on K81 / Vreven 106 / unified 287. Scripts span union refits, threshold/stratified PAE calibrations, interaction-ablation, ElasticNet priors, XGBoost residuals, entropy surrogates, plDDT-NIS, and CAD-score-LT scoring. | [PAE.md](PAE.md) |
+| [`proteinbase_pipeline/`](../benchmarks/scripts/proteinbase_pipeline/) | ProteinBase: plot Kd↔Boltz ipTM, download ModelCIF + PAE, score PRODIGY via tinygrad, CAD-score-LT (binder-only ESMFold ↔ Boltz complex-bound chain). | [PROTEINBASE_BENCHMARK.md](PROTEINBASE_BENCHMARK.md) |
+
+Outputs consumed by downstream pipelines land in:
+
+```
+benchmarks/output/
+├── kahraman_2013/{local,gpu}/results.csv       # Shrake–Rupley sweep
+├── kastritis_81_boltz/                         # Boltz-2 msa_only / template_msa
+├── vreven_bm55_boltz/                          # same shape as K81
+├── proteinbase/                                # Kd↔ipTM, PRODIGY + CAD-score-LT
+├── unified/                                    # K81 ∪ V106 ∪ PB feature tables
+├── union_k81_v106/pae_calibration/             # Refitted PAE-aware coefficients
+└── afdesign_april2026/                         # AFDesign hallucination runs (see AF_DESIGN.md)
+```
+
+Core calibration datasets are committed:
+
+- [`benchmarks/datasets/kastritis_81/`](../benchmarks/datasets/kastritis_81/) — 81 complexes with experimental ΔG + PRODIGY baselines (`dataset.json`).
+- [`benchmarks/datasets/vreven_bm55/`](../benchmarks/datasets/vreven_bm55/) — 257-row BM5.5 manifest + 106-row ΔG subset (joined from Kastritis 81 + Pierce Ab–Ag).
+- [`benchmarks/datasets/proteinbase/`](../benchmarks/datasets/proteinbase/) — 5,361-row design-target manifest from the 28-Jan-2026 ProteinBase snapshot.
+
 ---
 
 ## 5. Data and scoring model
@@ -439,10 +525,15 @@ Located under [`tests/`](../tests). Common fixture: `benchmarks/fixtures/1A2K.pd
 
 | Test | Scope |
 |------|-------|
+| `conftest.py` | Session-wide guard: forces `DEBUG=0` when the shell exports `DEBUG=release` (tinygrad requires integer). |
 | `test_imports.py` | Top-level re-exports and CLI modules import; experimental surface callables. |
 | `test_structure.py` | `load_complex` sanitizes H, water, and non-selected chains. |
+| `test_cpu_selection.py` | `_select_structure_chains` detaches unselected chains before freesasa runs. |
 | `test_regression.py` | CPU vs JAX prediction stay within `|ΔΔG| < 0.75` and `|ΔIC| < 10`. Skips if JAX / prodigy-prot / freesasa are missing. |
 | `test_tinygrad_smoke.py` | Tinygrad (experimental) prediction returns finite ΔG, within `|ΔΔG| < 0.75` and `|ΔIC| < 10` of the CPU reference. |
+| `test_bucketed_sasa.py` | Bucketed-padding SASA wrappers in `sasa_experimental` — numerical parity vs unbucketed, plus confirms the TinyJit cache keys on bucket `N` (not raw `N`). |
+| `test_af_design_soft.py` | Soft SASA/contact/NIS helpers stay numerically close to the hard kernels; `add_ba_val_loss` is wired into AFDesign's loss registry. |
+| `test_af_design_bsa.py` | AFDesign BSA logging: synthetic two-monomer JAX SASA recovers positive BSA in contact, ≈0 when far; `plot_afdesign rmsd --metric {rmsd,bsa,both}` accepts all three. |
 | `test_benchmark_smoke.py` | Local benchmark runner produces `results.csv` + `summary.json` with the unified schema; unknown backend names are rejected. |
 | `test_plot_results.py` | Multiple `results.csv` files merge on `pdb_id`; figure render path writes a non-empty PNG. |
 | `test_sasa_benchmark.py` | Shared benchmark helpers: backend registry, manifest round-trip, atom-count + memory snapshot + metrics extraction. |
@@ -465,9 +556,16 @@ python3 -m pytest
 
 - Core: `biopython`, `prodigy-prot`, `freesasa`, `numpy>=1.23,<3.0`, `jax`,
   `jaxlib`, `tinygrad`, `matplotlib`, `pandas`. A single
-  `pip install protein-affinity-gpu` brings in every backend (including the
-  experimental tinygrad surface) and the benchmarking plot stack.
+  `pip install protein-affinity-gpu` (or `uv sync`) brings in every backend
+  (including the experimental tinygrad surface) and the benchmarking plot
+  stack.
 - `[dev]` extra: `build`, `pytest>=8.0`, `ruff>=0.6`.
+- `[modal]` extra: `modal` — only needed for the GPU-remote entry points
+  (`benchmarks/modal_benchmark.py`, `benchmarks/scripts/boltz_pipeline/04_modal_boltz_predict.py`,
+  `af_design/modal_afdesign_ba_val.py`).
+
+The repo pins an exact resolution via `uv.lock`; `uv sync` (or
+`uv sync --extra modal`) materializes `.venv/` from the lock.
 
 Build system: **Hatchling**, with the version read dynamically from
 `src/protein_affinity_gpu/version.py`.
